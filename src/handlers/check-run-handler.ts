@@ -56,12 +56,10 @@ export async function handleCheckRunRequestedAction(
     const llmContext = buildPullRequestLlmContext(prData);
 
     let appliedLabels: string[] = [];
-    let interactive = false;
     let removedLabels: string[] = [];
 
     if (identifier === ACTION_SUGGEST) {
-      // Bascule en mode cases à cocher ; pré-coche les labels déjà sur la PR.
-      interactive = true;
+      // Pré-coche uniquement les labels déjà présents sur la PR.
       const present = new Set(
         prData.pullRequestLabels.map((l) => l.toLowerCase()),
       );
@@ -111,13 +109,11 @@ export async function handleCheckRunRequestedAction(
       return;
     }
 
-    const body = buildAnalysisComment(prData, llmContext, analysis, appliedLabels, {
-      interactive,
-    });
+    const body = buildAnalysisComment(prData, llmContext, analysis, appliedLabels);
     await upsertComment(context.octokit, owner, repo, pr.number, body);
 
     context.log.info(
-      { ...logContext, appliedLabels, removedLabels, interactive },
+      { ...logContext, appliedLabels, removedLabels },
       "Check run action handled",
     );
   } catch (error) {
