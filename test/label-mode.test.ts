@@ -79,4 +79,12 @@ describe("selectSuggestedLabelsBelowThreshold", () => {
     );
     expect(result).toEqual([]);
   });
+
+  it("reconnaît les labels sous leur forme préfixée 🤖 et retourne le nom exact", () => {
+    const result = selectSuggestedLabelsBelowThreshold(suggestions, [
+      "🤖 tests",
+      "🤖 security",
+    ]);
+    expect(result).toEqual(["🤖 tests"]);
+  });
 });

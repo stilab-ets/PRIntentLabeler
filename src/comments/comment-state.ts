@@ -1,5 +1,6 @@
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import type { LabelSuggestion } from "../domain/label-suggestion.js";
+import { toAiLabelName, stripAiLabelName } from "../labels/ai-label-name.js";
 
 // Bloc HTML invisible qui stocke l'analyse LLM de façon machine-readable,
 // pour que les handlers (clic bouton, case cochée) puissent agir sans
@@ -31,6 +32,8 @@ export function parseAnalysisDataBlock(
 
 // Rendu d'une ligne de case à cocher par label suggéré.
 // Une case est cochée si le label fait partie de `checkedLabels`.
+// Le nom affiché porte le préfixe "🤖 " : c'est exactement le nom du label
+// tel qu'il apparaît réellement sur la PR une fois appliqué par le bot.
 export function renderCheckboxLines(
   suggestions: LabelSuggestion[],
   checkedLabels: string[],
@@ -40,29 +43,31 @@ export function renderCheckboxLines(
     .map((s) => {
       const box = checked.has(s.name.toLowerCase()) ? "x" : " ";
       const pct = Math.round(s.confidence * 100);
-      return `- [${box}] \`${s.name}\` — ${pct}% — ${s.reason}`;
+      return `- [${box}] \`${toAiLabelName(s.name)}\` — ${pct}% — ${s.reason}`;
     })
     .join("\n");
 }
 
 // Extrait les labels cochés (- [x]) du corps d'un commentaire.
+// Retourne les noms bruts (sans le préfixe "🤖 ") pour rester compatibles
+// avec le reste du code, qui manipule les suggestions par leur nom d'origine.
 export function parseCheckedLabels(body: string): string[] {
   const regex = /^- \[([ xX])\] `([^`]+)`/gm;
   const checked: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = regex.exec(body)) !== null) {
-    if (match[1].toLowerCase() === "x") checked.push(match[2]);
+    if (match[1].toLowerCase() === "x") checked.push(stripAiLabelName(match[2]));
   }
   return checked;
 }
 
-// Extrait tous les labels présents dans les cases (cochés ou non).
+// Extrait tous les labels présents dans les cases (cochés ou non), noms bruts.
 export function parseAllCheckboxLabels(body: string): string[] {
   const regex = /^- \[[ xX]\] `([^`]+)`/gm;
   const labels: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = regex.exec(body)) !== null) {
-    labels.push(match[1]);
+    labels.push(stripAiLabelName(match[1]));
   }
   return labels;
 }

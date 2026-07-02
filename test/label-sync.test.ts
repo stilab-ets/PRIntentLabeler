@@ -43,4 +43,14 @@ describe("computeLabelChanges", () => {
     expect(toAdd).toEqual(["feature"]);
     expect(toRemove).toEqual(["bug"]);
   });
+
+  it("reconnaît un label présent sous sa forme préfixée 🤖 et retourne le nom exact à retirer", () => {
+    const { toAdd, toRemove } = computeLabelChanges(
+      suggested,
+      ["bug"],
+      ["🤖 bug", "🤖 tests"],
+    );
+    expect(toAdd).toEqual([]);
+    expect(toRemove).toEqual(["🤖 tests"]);
+  });
 });

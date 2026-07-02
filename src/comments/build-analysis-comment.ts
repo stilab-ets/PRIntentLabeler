@@ -7,6 +7,7 @@ import {
   BOT_COMMENT_MARKER,
   MAX_FILES_IN_COMMENT,
 } from "../utils/constants.js";
+import { toAiLabelName } from "../labels/ai-label-name.js";
 import {
   renderAnalysisDataBlock,
   renderCheckboxLines,
@@ -80,13 +81,14 @@ function buildLabelsSection(
     const appliedNote =
       appliedLabels.length > 0
         ? `\n\n> ${appliedLabels.length} label(s) actuellement appliqué(s) : ${appliedLabels
-            .map((label) => `\`${label}\``)
+            .map((label) => `\`${toAiLabelName(label)}\``)
             .join(", ")}.`
         : "\n\n> Aucun label appliqué pour l'instant.";
 
     return `###  Labels suggérés — coche ceux à appliquer
 
 > Coche/décoche une case pour appliquer ou retirer le label correspondant sur cette PR.
+> Un label appliqué par l'IA porte toujours l'icône 🤖 devant son nom (ex. \`🤖 bug\`) pour le distinguer d'un label ajouté manuellement par un humain, qui n'affiche jamais cette icône.
 
 ${checkboxes}${appliedNote}`;
   }

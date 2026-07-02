@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { handlePullRequestEvent } from "../src/handlers/pull-request-handler.js";
 import type { LlmProvider } from "../src/llm/llm-provider.js";
+import { toAiLabelName } from "../src/labels/ai-label-name.js";
 
 function createMockContext() {
   return {
@@ -44,6 +45,8 @@ function createMockContext() {
         updateComment: vi.fn().mockResolvedValue({}),
         addLabels: vi.fn().mockResolvedValue({}),
         removeLabel: vi.fn().mockResolvedValue({}),
+        createLabel: vi.fn().mockResolvedValue({}),
+        getLabel: vi.fn().mockResolvedValue({ data: { color: "d73a4a" } }),
       },
       checks: {
         create: vi.fn().mockResolvedValue({}),
@@ -105,11 +108,11 @@ describe("handlePullRequestEvent — chemin LLM", () => {
       expect.objectContaining({ name: "bug" }),
     );
     expect(ctx.octokit.issues.addLabels).toHaveBeenCalledWith(
-      expect.objectContaining({ labels: ["feature"] }),
+      expect.objectContaining({ labels: [toAiLabelName("feature")] }),
     );
   });
 
-  it("mode auto-all : applique tous les labels retenus", async () => {
+  it("mode auto-all : applique tous les labels retenus, préfixés par l'icône IA", async () => {
     process.env.LABEL_MODE = "auto-all";
     const ctx = createMockContext();
 
@@ -117,8 +120,21 @@ describe("handlePullRequestEvent — chemin LLM", () => {
     await handlePullRequestEvent(ctx as any, mockProvider());
 
     expect(ctx.octokit.issues.addLabels).toHaveBeenCalledWith(
-      expect.objectContaining({ labels: ["feature", "bug"] }),
+      expect.objectContaining({
+        labels: [toAiLabelName("feature"), toAiLabelName("bug")],
+      }),
     );
+  });
+
+  it("mode suggest : ne crée ni n'applique aucun label", async () => {
+    process.env.LABEL_MODE = "suggest";
+    const ctx = createMockContext();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handlePullRequestEvent(ctx as any, mockProvider());
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+    expect(ctx.octokit.issues.createLabel).not.toHaveBeenCalled();
   });
 
   it("ne plante pas si l'application des labels échoue", async () => {

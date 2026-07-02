@@ -3,6 +3,7 @@ import {
   AUTO_APPLY_CONFIDENCE_THRESHOLD,
   MAX_LABELS_TO_APPLY,
 } from "../utils/constants.js";
+import { stripAiLabelName } from "./ai-label-name.js";
 
 // Modes d'application des labels après analyse LLM.
 // - suggest   : ne touche pas aux labels, publie seulement un commentaire.
@@ -49,8 +50,11 @@ export function selectLabelsToApply(
   }
 }
 
-// Labels suggérés déjà présents sur la PR mais sous le seuil auto-high :
-// à retirer quand l'utilisateur bascule vers « Auto-apply high ».
+// Labels suggérés déjà présents sur la PR (sous leur forme "🤖 <nom>" ou,
+// si posés manuellement, sous leur nom brut) mais sous le seuil auto-high :
+// à retirer quand l'utilisateur bascule vers « Auto-apply high ». Le nom
+// retourné est celui exact présent sur la PR, utilisable tel quel pour
+// l'appel de suppression à l'API GitHub.
 export function selectSuggestedLabelsBelowThreshold(
   suggestions: LabelSuggestion[],
   currentPrLabels: string[],
@@ -61,7 +65,8 @@ export function selectSuggestedLabelsBelowThreshold(
   );
 
   return currentPrLabels.filter((label) => {
-    const confidence = confidenceByName.get(label.toLowerCase());
+    const baseName = stripAiLabelName(label).toLowerCase();
+    const confidence = confidenceByName.get(baseName);
     return confidence !== undefined && confidence < threshold;
   });
 }

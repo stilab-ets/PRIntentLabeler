@@ -22,3 +22,14 @@ export const MIN_CONFIDENCE_TO_SUGGEST = 0.7;
 
 // Confiance minimale pour qu'un label soit appliqué automatiquement (mode auto-high).
 export const AUTO_APPLY_CONFIDENCE_THRESHOLD = 0.85;
+
+// --- Marqueur visuel "label posé par l'IA" --------------------------------
+// GitHub ne permet pas d'ajouter une icône à côté d'un label existant sans
+// toucher au nom du label lui-même. Quand un label suggéré par le LLM est
+// appliqué (auto-apply ou case cochée), on crée/utilise donc une variante de
+// ce label préfixée par ce robot, ex. "bug" -> "🤖 bug". Un label ajouté
+// manuellement par un humain (sans ce préfixe) n'est jamais touché.
+export const AI_LABEL_PREFIX = "🤖 ";
+
+// Couleur de repli si le label d'origine n'existe pas encore / n'est pas lisible.
+export const AI_LABEL_FALLBACK_COLOR = "8A2BE2";

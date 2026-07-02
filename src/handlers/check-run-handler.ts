@@ -4,7 +4,9 @@ import { findBotComment, upsertComment } from "../github/pr-commenter.js";
 import { buildPullRequestLlmContext } from "../llm/pr-context.js";
 import { buildAnalysisComment } from "../comments/build-analysis-comment.js";
 import { parseAnalysisDataBlock } from "../comments/comment-state.js";
-import { applyLabels, removeLabels } from "../labels/label-applier.js";
+import { removeLabels } from "../labels/label-applier.js";
+import { applyAiSuggestedLabels } from "../labels/ai-label-applier.js";
+import { toAiLabelName } from "../labels/ai-label-name.js";
 import {
   selectLabelsToApply,
   selectSuggestedLabelsBelowThreshold,
@@ -59,13 +61,14 @@ export async function handleCheckRunRequestedAction(
     let removedLabels: string[] = [];
 
     if (identifier === ACTION_SUGGEST) {
-      // Pré-coche uniquement les labels déjà présents sur la PR.
+      // Pré-coche uniquement les labels déjà présents sur la PR (sous leur
+      // forme "🤖 <nom>", celle réellement appliquée par le bot).
       const present = new Set(
         prData.pullRequestLabels.map((l) => l.toLowerCase()),
       );
       appliedLabels = analysis.suggestions
         .map((s) => s.name)
-        .filter((name) => present.has(name.toLowerCase()));
+        .filter((name) => present.has(toAiLabelName(name).toLowerCase()));
     } else if (identifier === ACTION_APPLY_HIGH) {
       const toApply = selectLabelsToApply(analysis.suggestions, "auto-high");
       removedLabels = selectSuggestedLabelsBelowThreshold(
@@ -84,7 +87,7 @@ export async function handleCheckRunRequestedAction(
         );
       }
       if (appliedLabels.length > 0) {
-        await applyLabels(
+        await applyAiSuggestedLabels(
           context.octokit,
           owner,
           repo,
@@ -96,7 +99,7 @@ export async function handleCheckRunRequestedAction(
       const toApply = selectLabelsToApply(analysis.suggestions, "auto-all");
       appliedLabels = toApply.map((s) => s.name);
       if (appliedLabels.length > 0) {
-        await applyLabels(
+        await applyAiSuggestedLabels(
           context.octokit,
           owner,
           repo,

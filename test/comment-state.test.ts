@@ -29,19 +29,19 @@ describe("bloc data du commentaire", () => {
 });
 
 describe("cases à cocher", () => {
-  it("rend une ligne par suggestion, cochée selon l'état", () => {
+  it("rend une ligne par suggestion, cochée selon l'état, avec le nom préfixé par l'icône IA", () => {
     const lines = renderCheckboxLines(analysis.suggestions, ["bug"]);
-    expect(lines).toContain("- [x] `bug`");
-    expect(lines).toContain("- [ ] `tests`");
+    expect(lines).toContain("- [x] `🤖 bug`");
+    expect(lines).toContain("- [ ] `🤖 tests`");
   });
 
-  it("extrait uniquement les labels cochés", () => {
-    const body = "- [x] `bug` — 88%\n- [ ] `tests` — 72%";
+  it("extrait uniquement les labels cochés, sans le préfixe IA", () => {
+    const body = "- [x] `🤖 bug` — 88%\n- [ ] `🤖 tests` — 72%";
     expect(parseCheckedLabels(body)).toEqual(["bug"]);
   });
 
-  it("extrait tous les labels présents dans les cases", () => {
-    const body = "- [x] `bug` — 88%\n- [ ] `tests` — 72%";
+  it("extrait tous les labels présents dans les cases, sans le préfixe IA", () => {
+    const body = "- [x] `🤖 bug` — 88%\n- [ ] `🤖 tests` — 72%";
     expect(parseAllCheckboxLabels(body)).toEqual(["bug", "tests"]);
   });
 });

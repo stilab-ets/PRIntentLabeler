@@ -87,7 +87,7 @@ describe("buildAnalysisComment", () => {
     };
     const result = buildAnalysisComment(baseData, contextFor(baseData), analysis);
     expect(result).toContain("Labels suggérés — coche ceux à appliquer");
-    expect(result).toContain("- [ ] `bug`");
+    expect(result).toContain("- [ ] `🤖 bug`");
     expect(result).toContain("90%");
     expect(result).toContain("Correction d'un bug d'authentification.");
   });
@@ -98,11 +98,11 @@ describe("buildAnalysisComment", () => {
       summary: "",
     };
     const result = buildAnalysisComment(baseData, contextFor(baseData), analysis, []);
-    expect(result).toContain("- [ ] `bug`");
+    expect(result).toContain("- [ ] `🤖 bug`");
     expect(result).toContain("Aucun label appliqué pour l'instant.");
   });
 
-  it("précoche les cases des labels déjà appliqués", () => {
+  it("précoche les cases des labels déjà appliqués et affiche le nom avec l'icône IA", () => {
     const analysis: PullRequestAnalysis = {
       suggestions: [
         { name: "bug", confidence: 0.9, reason: "corrige un crash" },
@@ -116,8 +116,8 @@ describe("buildAnalysisComment", () => {
       analysis,
       ["bug"],
     );
-    expect(result).toContain("- [x] `bug`");
-    expect(result).toContain("- [ ] `feature`");
-    expect(result).toContain("1 label(s) actuellement appliqué(s) : `bug`.");
+    expect(result).toContain("- [x] `🤖 bug`");
+    expect(result).toContain("- [ ] `🤖 feature`");
+    expect(result).toContain("1 label(s) actuellement appliqué(s) : `🤖 bug`.");
   });
 });

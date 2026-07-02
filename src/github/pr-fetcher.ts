@@ -3,6 +3,7 @@ import type {
   PullRequestData,
   PullRequestFileData,
 } from "../domain/pull-request-data.js";
+import { isAiLabelName } from "../labels/ai-label-name.js";
 
 type OctokitLike = Context<"check_run">["octokit"];
 
@@ -57,7 +58,9 @@ export async function fetchPullRequestData(
     deletions: pr.deletions ?? 0,
     changedFilesCount: pr.changed_files ?? files.length,
     files,
-    repositoryLabels: labelsResponse.data.map((label) => label.name),
+    repositoryLabels: labelsResponse.data
+      .map((label) => label.name)
+      .filter((name) => !isAiLabelName(name)),
     pullRequestLabels: prLabelsResponse.data.map((label) => label.name),
   };
 }

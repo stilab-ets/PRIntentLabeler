@@ -3,6 +3,7 @@ import type {
   PullRequestData,
   PullRequestFileData,
 } from "../domain/pull-request-data.js";
+import { isAiLabelName } from "../labels/ai-label-name.js";
 
 export async function readPullRequestData(
   context: Context<"pull_request">,
@@ -56,7 +57,12 @@ export async function readPullRequestData(
     deletions: pr.deletions ?? 0,
     changedFilesCount: pr.changed_files ?? files.length,
     files,
-    repositoryLabels: labelsResponse.data.map((label) => label.name),
+    // On exclut les variantes "🤖 <nom>" déjà créées par le bot : ce ne sont
+    // pas des labels de taxonomie à proposer au LLM, seulement des marqueurs
+    // visuels générés à partir d'un label existant.
+    repositoryLabels: labelsResponse.data
+      .map((label) => label.name)
+      .filter((name) => !isAiLabelName(name)),
     pullRequestLabels: prLabelsResponse.data.map((label) => label.name),
   };
 }

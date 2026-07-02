@@ -5,7 +5,8 @@ import {
   parseCheckedLabels,
 } from "../comments/comment-state.js";
 import { computeLabelChanges } from "../labels/label-sync.js";
-import { applyLabels, removeLabels } from "../labels/label-applier.js";
+import { removeLabels } from "../labels/label-applier.js";
+import { applyAiSuggestedLabels } from "../labels/ai-label-applier.js";
 
 // Réagit à l'édition du commentaire de l'app : quand un mainteneur coche/décoche
 // une case, on synchronise les labels de la PR (ajout/retrait symétrique).
@@ -38,7 +39,7 @@ export async function handleIssueCommentEdited(
   if (toAdd.length === 0 && toRemove.length === 0) return;
 
   try {
-    await applyLabels(context.octokit, owner, repo, issue.number, toAdd);
+    await applyAiSuggestedLabels(context.octokit, owner, repo, issue.number, toAdd);
     await removeLabels(context.octokit, owner, repo, issue.number, toRemove);
 
     context.log.info(
