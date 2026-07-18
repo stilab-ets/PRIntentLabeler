@@ -3,7 +3,10 @@ import type { PullRequestLlmContext } from "../domain/pull-request-data.js";
 import type { LabelSuggestion } from "../domain/label-suggestion.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import type { LlmProvider } from "./llm-provider.js";
-import { buildClassificationPrompt } from "./prompt-builder.js";
+import {
+  buildClassificationPrompt,
+  buildClassificationSystemPrompt,
+} from "./prompt-builder.js";
 
 export class GroqProvider implements LlmProvider {
   private client: Groq;
@@ -17,13 +20,17 @@ export class GroqProvider implements LlmProvider {
   async classifyPullRequest(
     context: PullRequestLlmContext,
   ): Promise<PullRequestAnalysis> {
+    const systemPrompt = buildClassificationSystemPrompt();
     const prompt = buildClassificationPrompt(context);
 
     let response;
     try {
       response = await this.client.chat.completions.create({
         model: this.model,
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: prompt },
+        ],
         temperature: 0.1,
         max_tokens: 512,
         response_format: { type: "json_object" },
