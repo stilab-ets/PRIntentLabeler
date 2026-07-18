@@ -4,6 +4,7 @@ import type {
   PullRequestFileData,
 } from "../domain/pull-request-data.js";
 import { isAiLabelName } from "../labels/ai-label-name.js";
+import { listAllPages } from "./pagination.js";
 
 export async function readPullRequestData(
   context: Context<"pull_request">,
@@ -13,20 +14,19 @@ export async function readPullRequestData(
   const repo = repository.name;
   const pullNumber = pr.number;
 
-  const filesResponse = await context.octokit.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
-
-  const [labelsResponse, prLabelsResponse] = await Promise.all([
-    context.octokit.issues.listLabelsForRepo({
+  const [rawFiles, rawLabels, rawPrLabels] = await Promise.all([
+    listAllPages(context.octokit, context.octokit.pulls.listFiles, {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    }),
+    listAllPages(context.octokit, context.octokit.issues.listLabelsForRepo, {
       owner,
       repo,
       per_page: 100,
     }),
-    context.octokit.issues.listLabelsOnIssue({
+    listAllPages(context.octokit, context.octokit.issues.listLabelsOnIssue, {
       owner,
       repo,
       issue_number: pullNumber,
@@ -34,7 +34,7 @@ export async function readPullRequestData(
     }),
   ]);
 
-  const files: PullRequestFileData[] = filesResponse.data.map((file) => ({
+  const files: PullRequestFileData[] = rawFiles.map((file) => ({
     filename: file.filename,
     status: file.status,
     additions: file.additions,
@@ -60,9 +60,17 @@ export async function readPullRequestData(
     // On exclut les variantes "🤖 <nom>" déjà créées par le bot : ce ne sont
     // pas des labels de taxonomie à proposer au LLM, seulement des marqueurs
     // visuels générés à partir d'un label existant.
-    repositoryLabels: labelsResponse.data
+    repositoryLabels: rawLabels
       .map((label) => label.name)
       .filter((name) => !isAiLabelName(name)),
-    pullRequestLabels: prLabelsResponse.data.map((label) => label.name),
+    repositoryLabelDescriptions: Object.fromEntries(
+      rawLabels
+        .filter(
+          (label) =>
+            !isAiLabelName(label.name) && Boolean(label.description?.trim()),
+        )
+        .map((label) => [label.name, label.description?.trim() ?? ""]),
+    ),
+    pullRequestLabels: rawPrLabels.map((label) => label.name),
   };
 }
