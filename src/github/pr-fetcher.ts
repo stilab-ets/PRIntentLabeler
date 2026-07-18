@@ -4,6 +4,7 @@ import type {
   PullRequestFileData,
 } from "../domain/pull-request-data.js";
 import { isAiLabelName } from "../labels/ai-label-name.js";
+import { listAllPages } from "./pagination.js";
 
 type OctokitLike = Context<"check_run">["octokit"];
 
@@ -15,27 +16,30 @@ export async function fetchPullRequestData(
   repo: string,
   pullNumber: number,
 ): Promise<PullRequestData> {
-  const [prResponse, filesResponse, labelsResponse, prLabelsResponse] =
-    await Promise.all([
-      octokit.pulls.get({ owner, repo, pull_number: pullNumber }),
-      octokit.pulls.listFiles({
-        owner,
-        repo,
-        pull_number: pullNumber,
-        per_page: 100,
-      }),
-      octokit.issues.listLabelsForRepo({ owner, repo, per_page: 100 }),
-      octokit.issues.listLabelsOnIssue({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        per_page: 100,
-      }),
-    ]);
+  const [prResponse, rawFiles, rawLabels, rawPrLabels] = await Promise.all([
+    octokit.pulls.get({ owner, repo, pull_number: pullNumber }),
+    listAllPages(octokit, octokit.pulls.listFiles, {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    }),
+    listAllPages(octokit, octokit.issues.listLabelsForRepo, {
+      owner,
+      repo,
+      per_page: 100,
+    }),
+    listAllPages(octokit, octokit.issues.listLabelsOnIssue, {
+      owner,
+      repo,
+      issue_number: pullNumber,
+      per_page: 100,
+    }),
+  ]);
 
   const pr = prResponse.data;
 
-  const files: PullRequestFileData[] = filesResponse.data.map((file) => ({
+  const files: PullRequestFileData[] = rawFiles.map((file) => ({
     filename: file.filename,
     status: file.status,
     additions: file.additions,
@@ -58,9 +62,17 @@ export async function fetchPullRequestData(
     deletions: pr.deletions ?? 0,
     changedFilesCount: pr.changed_files ?? files.length,
     files,
-    repositoryLabels: labelsResponse.data
+    repositoryLabels: rawLabels
       .map((label) => label.name)
       .filter((name) => !isAiLabelName(name)),
-    pullRequestLabels: prLabelsResponse.data.map((label) => label.name),
+    repositoryLabelDescriptions: Object.fromEntries(
+      rawLabels
+        .filter(
+          (label) =>
+            !isAiLabelName(label.name) && Boolean(label.description?.trim()),
+        )
+        .map((label) => [label.name, label.description?.trim() ?? ""]),
+    ),
+    pullRequestLabels: rawPrLabels.map((label) => label.name),
   };
 }
