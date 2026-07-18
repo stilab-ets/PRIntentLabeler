@@ -22,8 +22,21 @@ export type PullRequestData = {
   changedFilesCount: number;
   files: PullRequestFileData[];
   repositoryLabels: string[];
+  repositoryLabelDescriptions?: Record<string, string>;
   pullRequestLabels: string[];
 };
+
+export type PullRequestFileRole =
+  | "source"
+  | "test"
+  | "documentation"
+  | "dependency"
+  | "ci-cd"
+  | "database"
+  | "configuration"
+  | "asset"
+  | "other"
+  | "generated";
 
 // Fichier auquel on a attribué un score d'importance pour la sélection LLM.
 export type RankedPullRequestFile = {
@@ -31,15 +44,25 @@ export type RankedPullRequestFile = {
   score: number;
   reasons: string[];
   ignored: boolean;
+  role: PullRequestFileRole;
 };
 
 // Résumé léger (sans patch) d'un fichier, utilisé dans le contexte global.
 export type RankedFileSummary = {
   filename: string;
   status: string;
+  additions: number;
+  deletions: number;
   changes: number;
   score: number;
   ignored: boolean;
+  role: PullRequestFileRole;
+};
+
+export type FileRoleSummary = {
+  role: PullRequestFileRole;
+  files: number;
+  changes: number;
 };
 
 // Contexte compact et filtré, prêt à être envoyé au LLM.
@@ -63,8 +86,11 @@ export type PullRequestLlmContext = {
     changedFilesCount: number;
   };
   repositoryLabels: string[];
+  repositoryLabelDescriptions: Record<string, string>;
   allFilesSummary: RankedFileSummary[];
+  fileRoleSummary: FileRoleSummary[];
   selectedFiles: RankedPullRequestFile[];
   ignoredFilesCount: number;
+  omittedFilesCount: number;
   selectedFilesCount: number;
 };
