@@ -6,7 +6,28 @@ export const MAX_FILES_IN_COMMENT = 20;
 export const MAX_FILES_FOR_LLM = 6;
 
 // Nombre maximum de lignes conservées par patch avant troncature.
-export const MAX_PATCH_LINES_PER_FILE = 40;
+export const MAX_PATCH_LINES_PER_FILE = 60;
+
+// Budget estimé des patches. L'approximation de 4 caractères par token est
+// volontairement simple et indépendante du tokenizer du modèle Groq choisi.
+export const ESTIMATED_CHARS_PER_TOKEN = 4;
+export const MAX_PATCH_TOKENS_PER_FILE = 750;
+export const MAX_TOTAL_PATCH_TOKENS = 2_500;
+
+// Les limites en caractères restent utiles à la troncature et sont dérivées
+// du budget de tokens pour éviter deux configurations contradictoires.
+export const MAX_PATCH_CHARS_PER_FILE =
+  MAX_PATCH_TOKENS_PER_FILE * ESTIMATED_CHARS_PER_TOKEN;
+export const MAX_TOTAL_PATCH_CHARS =
+  MAX_TOTAL_PATCH_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
+
+// Les descriptions de PR automatisées (Dependabot, changelogs, templates)
+// peuvent être immenses. Le début contient généralement l'intention utile.
+export const MAX_PR_BODY_CHARS = 2_500;
+
+// Les grands dépôts peuvent avoir plusieurs centaines de labels de statut,
+// d'équipe ou de taille. On conserve les candidats d'intention les plus utiles.
+export const MAX_REPOSITORY_LABELS_FOR_LLM = 50;
 
 // Taille maximale du résumé de tous les fichiers inclus dans le contexte.
 export const MAX_ALL_FILES_SUMMARY = 100;

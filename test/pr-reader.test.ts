@@ -46,7 +46,11 @@ function createMockContext(overrides: Record<string, unknown> = {}) {
       },
       issues: {
         listLabelsForRepo: vi.fn().mockResolvedValue({
-          data: [{ name: "bug" }, { name: "feature" }, { name: "tests" }],
+          data: [
+            { name: "bug", description: "Something is not working" },
+            { name: "feature", description: "New functionality" },
+            { name: "tests", description: null },
+          ],
         }),
         listLabelsOnIssue: vi.fn().mockResolvedValue({
           data: [{ name: "bug" }],
@@ -95,6 +99,10 @@ describe("readPullRequestData", () => {
     const result = await readPullRequestData(ctx as any);
 
     expect(result.repositoryLabels).toEqual(["bug", "feature", "tests"]);
+    expect(result.repositoryLabelDescriptions).toEqual({
+      bug: "Something is not working",
+      feature: "New functionality",
+    });
   });
 
   it("extrait les labels actuellement présents sur la PR", async () => {
