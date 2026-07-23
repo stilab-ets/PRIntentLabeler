@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { truncatePatch, truncateFilePatch } from "../src/llm/patch-utils.js";
+import {
+  estimateTokens,
+  truncatePatch,
+  truncateFilePatch,
+} from "../src/llm/patch-utils.js";
 import type { PullRequestFileData } from "../src/domain/pull-request-data.js";
 
 describe("truncatePatch", () => {
@@ -23,6 +27,32 @@ describe("truncatePatch", () => {
     const patch = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n");
     const result = truncatePatch(patch, 5);
     expect(result).toContain("(15 more lines truncated)");
+  });
+
+  it("conserve aussi la fin d'un patch tronqué", () => {
+    const patch = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n");
+    const result = truncatePatch(patch, 5);
+    expect(result).toContain("line19");
+  });
+
+  it("borne également les très longues lignes par caractères", () => {
+    const result = truncatePatch(`+${"x".repeat(5_000)}`, 10, 500);
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(500);
+    expect(result).toContain("characters truncated");
+  });
+
+  it("respecte aussi une limite plus courte que le marqueur", () => {
+    const result = truncatePatch("x".repeat(100), 10, 10);
+    expect(result).toHaveLength(10);
+  });
+});
+
+describe("estimateTokens", () => {
+  it("estime le coût avec la convention de quatre caractères par token", () => {
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("abcde")).toBe(2);
+    expect(estimateTokens(undefined)).toBe(0);
   });
 });
 
