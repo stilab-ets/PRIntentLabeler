@@ -2,8 +2,11 @@ import type { Context } from "probot";
 import { readPullRequestData } from "../github/pr-reader.js";
 import { buildAnalysisComment } from "../comments/build-analysis-comment.js";
 import { upsertPullRequestComment } from "../github/pr-commenter.js";
-import { GroqProvider } from "../llm/groq-provider.js";
 import type { LlmProvider } from "../llm/llm-provider.js";
+import {
+  createEnvironmentLlmProvider,
+  createLlmProvider,
+} from "../llm/provider-factory.js";
 import { buildPullRequestLlmContext } from "../llm/pr-context.js";
 import { filterValidSuggestions } from "../labels/label-policy.js";
 import {
@@ -16,16 +19,8 @@ import { applyAiSuggestedLabels } from "../labels/ai-label-applier.js";
 import { createLabelerCheckRun } from "../github/check-run.js";
 import { MAX_LABELS_TO_APPLY } from "../utils/constants.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
-import type { GroqUsageMetrics } from "../llm/groq-provider.js";
-
-function createGroqProvider(
-  onUsage: (metrics: GroqUsageMetrics) => void,
-): LlmProvider | null {
-  const apiKey = process.env.GROQ_API_KEY;
-  const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
-  if (!apiKey || apiKey === "REMPLACER_PAR_VOTRE_CLE") return null;
-  return new GroqProvider(apiKey, model, onUsage);
-}
+import type { LlmUsageMetrics } from "../llm/openai-compatible-provider.js";
+import { getLlmConfigurationService } from "../configuration/runtime.js";
 
 export async function handlePullRequestEvent(
   context: Context<"pull_request">,
@@ -78,15 +73,57 @@ export async function handlePullRequestEvent(
     );
 
     let analysis: PullRequestAnalysis | null = null;
-    const provider =
-      providerOverride !== undefined
-        ? providerOverride
-        : createGroqProvider((usage) =>
-            context.log.info(
-              { ...logContext, ...usage },
-              "Groq token usage measured",
-            ),
+    let provider: LlmProvider | null;
+
+    // Journalise les jetons réellement facturés par le fournisseur retenu,
+    // quel qu'il soit, afin de valider notre estimation locale du budget.
+    const onUsage = (usage: LlmUsageMetrics) =>
+      context.log.info(
+        { ...logContext, ...usage },
+        "LLM token usage measured",
+      );
+
+    if (providerOverride !== undefined) {
+      provider = providerOverride;
+    } else {
+      const installationId = context.payload.installation?.id;
+      const configurationService = getLlmConfigurationService();
+
+      try {
+        const configuration =
+          installationId && configurationService
+            ? await configurationService.resolve(installationId)
+            : null;
+        provider = configuration
+          ? createLlmProvider(configuration, onUsage)
+          : createEnvironmentLlmProvider(onUsage);
+
+        if (configuration) {
+          context.log.info(
+            {
+              ...logContext,
+              installationId,
+              llmProvider: configuration.provider,
+              llmModel: configuration.model,
+            },
+            "Installation LLM configuration loaded",
           );
+        }
+      } catch (configurationError) {
+        provider = null;
+        context.log.warn(
+          {
+            ...logContext,
+            installationId,
+            error:
+              configurationError instanceof Error
+                ? configurationError.message
+                : configurationError,
+          },
+          "Failed to load installation LLM configuration",
+        );
+      }
+    }
 
     if (provider) {
       try {
@@ -119,7 +156,7 @@ export async function handlePullRequestEvent(
     } else {
       context.log.warn(
         logContext,
-        "GROQ_API_KEY not configured, skipping LLM classification",
+        "No LLM configuration available, skipping LLM classification",
       );
     }
 
