@@ -16,6 +16,7 @@ default_events:
   - pull_request
   - check_run
   - issue_comment
+  - installation
 
 # The set of permissions needed by the GitHub App. The format of the object uses
 # the permission name for the key (for example, issues) and the access type for
@@ -98,6 +99,13 @@ name: llm-pr-labeler
 
 # The homepage of your GitHub App (required by GitHub manifest).
 url: http://localhost:3000
+
+# Configuration LLM après installation. En production, remplacer localhost
+# dans les paramètres de la GitHub App par le domaine HTTPS du backend.
+setup_url: http://localhost:3000/setup
+setup_on_update: true
+callback_urls:
+  - http://localhost:3000/auth/github/callback
 
 # A description of the GitHub App.
 description: GitHub App that suggests PR labels via LLM (PFE013 ÉTS)
