@@ -7,4 +7,7 @@ export interface LlmProvider {
   classifyPullRequest(
     context: PullRequestLlmContext,
   ): Promise<PullRequestAnalysis>;
+
+  // Vérifie les identifiants sans enregistrer ni exposer la clé.
+  checkConnection?(): Promise<void>;
 }
