@@ -54,6 +54,21 @@ npm run eval:selector -- evaluation/prs-annotees.json --output evaluation/result
 L'échantillon public utilisé pour calibrer cette version est documenté dans
 [`docs/file-selection-evaluation.md`](docs/file-selection-evaluation.md).
 
+### Choix du fournisseur LLM
+
+Une installation GitHub peut utiliser sa propre clé et choisir entre Groq,
+OpenAI, Anthropic, Gemini, xAI, Perplexity ou une API compatible OpenAI. La
+configuration est chargée avec `installation.id`; les commentaires, les
+checks et l'application des labels conservent le même fonctionnement.
+
+La clé est testée avant l'enregistrement, chiffrée avec AES-256-GCM et n'est
+jamais réaffichée. L'utilisateur peut modifier le fournisseur ou le modèle,
+remplacer la clé et supprimer sa configuration depuis `/settings`.
+
+Le parcours complet, les variables requises et la migration PostgreSQL sont
+documentés dans
+[`docs/llm-provider-configuration.md`](docs/llm-provider-configuration.md).
+
 ## Installation locale
 
 Prérequis : Node 20+, npm 10+
@@ -81,6 +96,7 @@ Au premier lancement, Probot ouvre une page web qui te guide pour créer la GitH
 | `npm run test:coverage`               | Tests avec rapport de couverture      |
 | `npm run evaluate:selection -- <URL>` | Inspecte le score sur une PR publique |
 | `npm run eval:selector -- <dataset>` | Compare les quatre variantes d'ablation |
+| `npm run db:migrate`                  | Applique la migration PostgreSQL      |
 | `npm run lint`                        | Vérifie le code avec ESLint           |
 | `npm run format`                      | Formate le code avec Prettier         |
 
