@@ -22,6 +22,7 @@ function baseData(files: PullRequestFileData[]): PullRequestData {
     author: "talip",
     baseBranch: "main",
     headBranch: "feat",
+    headSha: "abc123",
     htmlUrl: "https://github.com/org/repo/pull/7",
     additions: 10,
     deletions: 2,
@@ -50,7 +51,7 @@ describe("buildPullRequestLlmContext", () => {
     expect(ctx.pullRequest.title).toBe("Some PR");
   });
 
-  it("inclut score et ignored dans allFilesSummary", () => {
+  it("inclut score, role et contentPolicy dans allFilesSummary", () => {
     const ctx = buildPullRequestLlmContext(
       baseData([
         {
@@ -72,11 +73,17 @@ describe("buildPullRequestLlmContext", () => {
     expect(ctx.allFilesSummary.length).toBe(2);
     for (const summary of ctx.allFilesSummary) {
       expect(summary).toHaveProperty("score");
-      expect(summary).toHaveProperty("ignored");
+      expect(summary).toHaveProperty("role");
+      expect(summary).toHaveProperty("contentPolicy");
     }
+    const lockfile = ctx.allFilesSummary.find(
+      (f) => f.filename === "package-lock.json",
+    );
+    expect(lockfile?.role).toBe("dependency");
+    expect(lockfile?.contentPolicy).toBe("summary-only");
   });
 
-  it("exclut les fichiers ignorés des selectedFiles", () => {
+  it("exclut les fichiers generated/summary-only des selectedFiles", () => {
     const ctx = buildPullRequestLlmContext(
       baseData([
         {
@@ -85,6 +92,7 @@ describe("buildPullRequestLlmContext", () => {
           additions: 1,
           deletions: 0,
           changes: 1,
+          patch: "+a",
         },
         {
           filename: "dist/bundle.js",
@@ -92,13 +100,49 @@ describe("buildPullRequestLlmContext", () => {
           additions: 1,
           deletions: 0,
           changes: 1,
+          patch: "+bundle",
         },
       ]),
     );
     const names = ctx.selectedFiles.map((r) => r.file.filename);
     expect(names).toContain("src/a.ts");
     expect(names).not.toContain("dist/bundle.js");
-    expect(ctx.ignoredFilesCount).toBe(1);
+    expect(ctx.summaryOnlyFilesCount).toBe(1);
+  });
+
+  it("ne compte jamais un lockfile ou un snapshot comme sélectionné, mais les compte en summary-only", () => {
+    const ctx = buildPullRequestLlmContext(
+      baseData([
+        {
+          filename: "src/a.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          patch: "+a",
+        },
+        {
+          filename: "package-lock.json",
+          status: "modified",
+          additions: 500,
+          deletions: 0,
+          changes: 500,
+          patch: "+huge lockfile diff",
+        },
+        {
+          filename: "src/__snapshots__/a.snap",
+          status: "modified",
+          additions: 50,
+          deletions: 0,
+          changes: 50,
+          patch: "+snapshot content",
+        },
+      ]),
+    );
+    const names = ctx.selectedFiles.map((r) => r.file.filename);
+    expect(names).not.toContain("package-lock.json");
+    expect(names).not.toContain("src/__snapshots__/a.snap");
+    expect(ctx.summaryOnlyFilesCount).toBe(2);
   });
 
   it("limite selectedFiles à MAX_FILES_FOR_LLM", () => {
@@ -108,6 +152,7 @@ describe("buildPullRequestLlmContext", () => {
       additions: 1,
       deletions: 0,
       changes: 1,
+      patch: `+line${i}`,
     }));
     const ctx = buildPullRequestLlmContext(baseData(files));
     expect(ctx.selectedFiles.length).toBe(MAX_FILES_FOR_LLM);
@@ -171,7 +216,47 @@ describe("buildPullRequestLlmContext", () => {
     expect(estimatedTokens).toBeLessThanOrEqual(MAX_TOTAL_PATCH_TOKENS);
   });
 
-  it("résume la distribution des rôles de fichiers", () => {
+  it("réduit le budget des patchs quand les métadonnées de la PR sont très volumineuses", () => {
+    const files: PullRequestFileData[] = Array.from({ length: 6 }, (_, i) => ({
+      filename: `src/file${i}.ts`,
+      status: "modified",
+      additions: 100,
+      deletions: 0,
+      changes: 100,
+      patch: `+${"x".repeat(5_000)}`,
+    }));
+
+    const smallData = baseData(files);
+    const hugeData = {
+      ...baseData(files),
+      body: "x".repeat(50_000),
+      repositoryLabels: Array.from({ length: 30 }, (_, i) => `label-${i}`),
+      repositoryLabelDescriptions: Object.fromEntries(
+        Array.from({ length: 30 }, (_, i) => [
+          `label-${i}`,
+          "a fairly long description that repeats a lot of filler text ".repeat(
+            5,
+          ),
+        ]),
+      ),
+    };
+
+    const smallCtx = buildPullRequestLlmContext(smallData);
+    const hugeCtx = buildPullRequestLlmContext(hugeData);
+
+    const smallTotal = smallCtx.selectedFiles.reduce(
+      (total, s) => total + estimateTokens(s.file.patch),
+      0,
+    );
+    const hugeTotal = hugeCtx.selectedFiles.reduce(
+      (total, s) => total + estimateTokens(s.file.patch),
+      0,
+    );
+
+    expect(hugeTotal).toBeLessThanOrEqual(smallTotal);
+  });
+
+  it("résume la distribution des rôles de fichiers, en incluant les lockfiles/snapshots et en excluant le bruit généré", () => {
     const ctx = buildPullRequestLlmContext(
       baseData([
         {
@@ -188,6 +273,20 @@ describe("buildPullRequestLlmContext", () => {
           deletions: 0,
           changes: 20,
         },
+        {
+          filename: "package-lock.json",
+          status: "modified",
+          additions: 5,
+          deletions: 0,
+          changes: 5,
+        },
+        {
+          filename: "dist/bundle.js",
+          status: "modified",
+          additions: 999,
+          deletions: 0,
+          changes: 999,
+        },
       ]),
     );
 
@@ -195,8 +294,12 @@ describe("buildPullRequestLlmContext", () => {
       expect.arrayContaining([
         { role: "source", files: 1, changes: 10 },
         { role: "test", files: 1, changes: 20 },
+        { role: "dependency", files: 1, changes: 5 },
       ]),
     );
+    expect(
+      ctx.fileRoleSummary.find((r) => r.role === "generated"),
+    ).toBeUndefined();
   });
 
   it("borne les labels envoyés au LLM tout en gardant les labels d'intention", () => {

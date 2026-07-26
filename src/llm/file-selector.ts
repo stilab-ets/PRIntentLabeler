@@ -1,10 +1,15 @@
 import type {
+  FileContentPolicy,
   PullRequestFileData,
   PullRequestFileRole,
   RankedPullRequestFile,
 } from "../domain/pull-request-data.js";
+import { PR_BODY_MATCH_BONUS, PR_TITLE_MATCH_BONUS } from "../utils/constants.js";
 
-const IGNORED_BASENAMES = new Set([
+// Un lockfile est un signal fort ("cette PR touche aux dépendances") mais son
+// contenu est généré mécaniquement : jamais utile en diff, souvent énorme.
+// Rôle "dependency" + contentPolicy "summary-only" (voir determineContentPolicy).
+const LOCKFILE_BASENAMES = new Set([
   "package-lock.json",
   "yarn.lock",
   "pnpm-lock.yaml",
@@ -20,16 +25,22 @@ const IGNORED_BASENAMES = new Set([
   "packages.lock.json",
 ]);
 
-const IGNORED_DIRECTORIES = [
+// Répertoires dont le contenu est systématiquement généré ou vendored :
+// jamais du code "source" écrit par un humain pour cette PR.
+const GENERATED_DIRECTORIES = [
   "dist",
   "coverage",
   ".next",
   "node_modules",
   ".cache",
   ".turbo",
+  "generated",
+  "gen",
+  "__generated__",
 ];
 
-const IGNORED_EXTENSIONS = [
+// Extensions binaires, compilées ou minifiées : aucune valeur sémantique en diff.
+const GENERATED_EXTENSIONS = [
   ".min.js",
   ".min.css",
   ".map",
@@ -111,18 +122,144 @@ const SOURCE_EXTENSIONS = [
   ".dart",
 ];
 
+// Scores de base sur une échelle ~20 pour rester lisibles ; le total réel
+// (avec bonus/malus) peut dépasser cette valeur, ce n'est pas une note fixe.
 const ROLE_BASE_SCORES: Record<PullRequestFileRole, number> = {
-  source: 70,
-  database: 68,
-  "ci-cd": 64,
-  dependency: 62,
-  configuration: 55,
-  documentation: 52,
-  test: 50,
-  other: 42,
-  asset: 36,
-  generated: -100,
+  source: 14,
+  database: 13,
+  "ci-cd": 12,
+  dependency: 12,
+  configuration: 10,
+  documentation: 9,
+  test: 9,
+  other: 7,
+  asset: 5,
+  generated: 1,
 };
+
+// Mots trop génériques pour être un signal utile de correspondance titre/chemin.
+const PR_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "this",
+  "that",
+  "into",
+  "fix",
+  "fixes",
+  "fixed",
+  "feat",
+  "feature",
+  "add",
+  "adds",
+  "added",
+  "update",
+  "updates",
+  "updated",
+  "remove",
+  "removes",
+  "removed",
+  "refactor",
+  "chore",
+  "docs",
+  "doc",
+  "test",
+  "tests",
+  "pull",
+  "request",
+  "bug",
+  "une",
+  "des",
+  "les",
+  "pour",
+  "avec",
+  "dans",
+  "sur",
+  "par",
+]);
+
+// Tokens de sécurité/performance : un simple mot dans un chemin ne suffit
+// plus à déclencher le bonus (voir hasConfirmedSignal), il faut aussi que
+// la PR (titre/description) en parle explicitement pour éviter les faux positifs
+// (ex. "author.ts" ne doit jamais être traité comme un signal de sécurité).
+const SECURITY_TOKENS = new Set([
+  "auth",
+  "authentication",
+  "authorization",
+  "oauth",
+  "login",
+  "logout",
+  "jwt",
+  "credential",
+  "credentials",
+  "password",
+  "security",
+  "permission",
+  "permissions",
+  "rbac",
+  "acl",
+  "csrf",
+  "cors",
+  "crypto",
+]);
+
+const PERFORMANCE_TOKENS = new Set([
+  "cache",
+  "caching",
+  "perf",
+  "performance",
+  "benchmark",
+  "benchmarks",
+  "latency",
+  "throughput",
+  "memoize",
+  "debounce",
+  "throttle",
+]);
+
+const PUBLIC_BEHAVIOR_TOKENS = ["controller", "service", "router", "endpoint"];
+
+export type FileScoreContext = {
+  title?: string;
+  body?: string;
+};
+
+/**
+ * Tokenizer unique, réutilisé pour le titre, la description ET le chemin de
+ * fichier, afin que les trois signaux soient comparables terme à terme :
+ * - enlève les accents (userService === user_service === user-service);
+ * - découpe le camelCase (authService -> auth, service);
+ * - découpe la ponctuation (_, -, /, ., espaces...);
+ * - ignore les tokens numériques et les tokens de moins de 3 caractères;
+ * - ignore les mots-outils trop génériques (PR_STOP_WORDS).
+ */
+export function tokenizeText(text: string): Set<string> {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+
+  return new Set(
+    normalized
+      .split(/[^a-z0-9]+/)
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          !/^\d+$/.test(token) &&
+          !PR_STOP_WORDS.has(token),
+      ),
+  );
+}
+
+// Conservé pour compatibilité (scripts / affichage) : tous les mots-clés
+// utiles du titre + de la description, fusionnés en une seule liste.
+export function extractPrKeywords(title: string = "", body: string = ""): string[] {
+  return [...tokenizeText(`${title} ${body}`)];
+}
 
 function basename(filename: string): string {
   const parts = filename.split("/");
@@ -133,25 +270,8 @@ function pathSegments(filename: string): string[] {
   return filename.toLowerCase().split("/").filter(Boolean);
 }
 
-function hasPathSegment(filename: string, segments: string[]): boolean {
-  const parts = pathSegments(filename);
-  return segments.some((segment) => parts.includes(segment));
-}
-
-/**
- * Découpe un chemin sur la ponctuation et les frontières camelCase.
- * Les signaux sont ensuite comparés par mot entier : `authService` contient
- * bien `auth`, tandis que `author` ne déclenche pas un signal de sécurité.
- */
-function tokenizePath(filename: string): Set<string> {
-  const tokens = filename
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-
-  return new Set(tokens);
+function isInDirectory(context: FilePathContext, directories: string[]): boolean {
+  return directories.some((directory) => context.segments.includes(directory));
 }
 
 type FilePathContext = {
@@ -172,35 +292,39 @@ function buildFilePathContext(filename: string): FilePathContext {
     base,
     extension: extensionStart > 0 ? base.slice(extensionStart) : "",
     segments: pathSegments(path),
-    tokens: tokenizePath(filename),
+    tokens: tokenizeText(filename),
   };
 }
 
-function hasAnyToken(context: FilePathContext, tokens: string[]): boolean {
-  return tokens.some((token) => context.tokens.has(token));
-}
-
-function isInDirectory(
-  context: FilePathContext,
-  directories: string[],
-): boolean {
-  return directories.some((directory) => context.segments.includes(directory));
-}
-
-export function shouldIgnoreFile(filename: string): boolean {
-  const lower = filename.toLowerCase();
-
-  if (IGNORED_BASENAMES.has(basename(lower))) return true;
-  if (hasPathSegment(lower, IGNORED_DIRECTORIES)) return true;
-  if (IGNORED_EXTENSIONS.some((extension) => lower.endsWith(extension))) {
-    return true;
+function intersects(a: Set<string>, b: Iterable<string>): boolean {
+  for (const token of b) {
+    if (a.has(token)) return true;
   }
-
   return false;
 }
 
+function isSnapshotFile(context: FilePathContext): boolean {
+  return context.segments.includes("__snapshots__") || context.path.endsWith(".snap");
+}
+
+function isLockfile(context: FilePathContext): boolean {
+  return LOCKFILE_BASENAMES.has(context.base);
+}
+
+// Bruit pur : jamais un rôle "source", jamais un patch envoyé, quel que soit
+// le score. Vérifié avant toute autre règle de rôle.
+function isGeneratedLooking(context: FilePathContext): boolean {
+  return (
+    isInDirectory(context, GENERATED_DIRECTORIES) ||
+    context.base.includes(".generated.") ||
+    context.base.endsWith(".pb.go") ||
+    context.base.endsWith(".g.cs") ||
+    GENERATED_EXTENSIONS.some((extension) => context.base.endsWith(extension))
+  );
+}
+
 type RoleRule = {
-  role: Exclude<PullRequestFileRole, "generated" | "other">;
+  role: Exclude<PullRequestFileRole, "generated" | "other" | "dependency">;
   matches: (context: FilePathContext) => boolean;
 };
 
@@ -218,13 +342,6 @@ const ROLE_RULES: RoleRule[] = [
       base === "azure-pipelines.yml" ||
       base === "azure-pipelines.yaml" ||
       base.startsWith("dockerfile"),
-  },
-  {
-    role: "dependency",
-    matches: ({ base }) =>
-      DEPENDENCY_MANIFESTS.has(base) ||
-      base.startsWith("requirements-") ||
-      base.startsWith("requirements."),
   },
   {
     role: "test",
@@ -271,7 +388,7 @@ const ROLE_RULES: RoleRule[] = [
         "schemas",
       ]) ||
       [".sql", ".prisma"].includes(context.extension) ||
-      hasAnyToken(context, ["database", "migration", "prisma", "schema"]),
+      intersects(context.tokens, ["database", "migration", "prisma", "schema"]),
   },
   {
     role: "configuration",
@@ -297,91 +414,85 @@ const ROLE_RULES: RoleRule[] = [
   },
 ];
 
-export function classifyFileRole(filename: string): PullRequestFileRole {
-  if (shouldIgnoreFile(filename)) return "generated";
+function hasPathSegment(filename: string, segments: string[]): boolean {
+  const parts = pathSegments(filename);
+  return segments.some((segment) => parts.includes(segment));
+}
 
+// Vrai si le fichier ne doit jamais recevoir de rôle "source" et ne peut
+// jamais faire partie des diffs envoyés au LLM (voir aussi determineContentPolicy).
+export function shouldIgnoreFile(filename: string): boolean {
+  return classifyFileRole(filename) === "generated";
+}
+
+export function classifyFileRole(filename: string): PullRequestFileRole {
   const context = buildFilePathContext(filename);
+
+  // Le bruit généré/binaire est exclu avant même de regarder s'il s'agit
+  // d'un lockfile ou d'un chemin "source" : un fichier sous dist/ ou node_modules/
+  // reste "generated" même s'il porte l'extension .ts.
+  if (isGeneratedLooking(context)) return "generated";
+  if (isLockfile(context)) return "dependency";
+  if (DEPENDENCY_MANIFESTS.has(context.base) || context.base.startsWith("requirements-") || context.base.startsWith("requirements.")) {
+    return "dependency";
+  }
+
   return ROLE_RULES.find((rule) => rule.matches(context))?.role ?? "other";
+}
+
+// Sépare le rôle sémantique du droit d'envoyer le patch complet au LLM :
+// un lockfile ou un snapshot reste un signal utile (visible dans le résumé),
+// mais son contenu volumineux/généré ne doit jamais consommer le budget de patch.
+export function determineContentPolicy(
+  filename: string,
+  role: PullRequestFileRole,
+): FileContentPolicy {
+  const context = buildFilePathContext(filename);
+
+  if (role === "generated") return "summary-only";
+  if (role === "dependency" && isLockfile(context)) return "summary-only";
+  if (role === "test" && isSnapshotFile(context)) return "summary-only";
+
+  return "include-patch";
 }
 
 type Evaluation = {
   score: number;
   reasons: string[];
-  ignored: boolean;
   role: PullRequestFileRole;
+  contentPolicy: FileContentPolicy;
 };
 
-type ScoreSignalRule = {
-  points: number;
-  reason: string;
-  matches: (context: FilePathContext, role: PullRequestFileRole) => boolean;
+type PrKeywordContext = {
+  titleKeywords: Set<string>;
+  bodyKeywords: Set<string>;
+  prTokens: Set<string>;
 };
 
-const SCORE_SIGNAL_RULES: ScoreSignalRule[] = [
-  {
-    points: 10,
-    reason: "security signal",
-    matches: (context) =>
-      hasAnyToken(context, [
-        "auth",
-        "authentication",
-        "authorization",
-        "oauth",
-        "login",
-        "logout",
-        "jwt",
-        "credential",
-        "credentials",
-        "password",
-        "security",
-        "permission",
-        "permissions",
-        "rbac",
-        "acl",
-        "csrf",
-        "cors",
-        "crypto",
-      ]),
-  },
-  {
-    points: 8,
-    reason: "performance signal",
-    matches: (context) =>
-      hasAnyToken(context, [
-        "cache",
-        "caching",
-        "perf",
-        "performance",
-        "benchmark",
-        "benchmarks",
-        "latency",
-        "throughput",
-        "memoize",
-        "debounce",
-        "throttle",
-      ]),
-  },
-  {
-    points: 5,
-    reason: "public behavior signal",
-    matches: (context, role) =>
-      role === "source" &&
-      (hasAnyToken(context, ["controller", "service", "router", "endpoint"]) ||
-        context.segments.includes("api")),
-  },
-];
+function buildPrKeywordContext(context: FileScoreContext): PrKeywordContext {
+  const titleKeywords = tokenizeText(context.title ?? "");
+  const bodyKeywords = tokenizeText(context.body ?? "");
+  return {
+    titleKeywords,
+    bodyKeywords,
+    prTokens: new Set([...titleKeywords, ...bodyKeywords]),
+  };
+}
 
-function evaluateFile(file: PullRequestFileData): Evaluation {
+function evaluateFile(
+  file: PullRequestFileData,
+  prKeywords: PrKeywordContext,
+): Evaluation {
   const context = buildFilePathContext(file.filename);
   const role = classifyFileRole(file.filename);
-  const ignored = role === "generated";
+  const contentPolicy = determineContentPolicy(file.filename, role);
 
-  if (ignored) {
+  if (role === "generated") {
     return {
       score: ROLE_BASE_SCORES.generated,
-      reasons: ["generated or binary file"],
-      ignored: true,
+      reasons: ["generated or binary file (summary only)"],
       role,
+      contentPolicy,
     };
   }
 
@@ -393,70 +504,92 @@ function evaluateFile(file: PullRequestFileData): Evaluation {
     reasons.push(reason);
   };
 
-  for (const rule of SCORE_SIGNAL_RULES) {
-    if (rule.matches(context, role)) add(rule.points, rule.reason);
+  if (contentPolicy === "summary-only") {
+    reasons.push("summary only (patch never sent)");
+  }
+
+  // Un token exact du titre pèse plus qu'un token de la description ; les
+  // deux bonus ne se cumulent jamais pour éviter de sur-pondérer un même mot.
+  const titleMatches = intersects(context.tokens, prKeywords.titleKeywords);
+  const bodyMatches = intersects(context.tokens, prKeywords.bodyKeywords);
+  if (titleMatches) {
+    add(PR_TITLE_MATCH_BONUS, "matches PR title");
+  } else if (bodyMatches) {
+    add(PR_BODY_MATCH_BONUS, "matches PR description");
+  }
+
+  // Sécurité/performance exigent une confirmation croisée chemin + PR : un
+  // fichier nommé "author.ts" ou "cache-utils.ts" ne suffit pas seul, il faut
+  // que la PR elle-même parle explicitement de sécurité ou de performance.
+  const hasSecurityPathSignal = intersects(context.tokens, SECURITY_TOKENS);
+  const hasSecurityPrSignal = intersects(prKeywords.prTokens, SECURITY_TOKENS);
+  if (hasSecurityPathSignal && hasSecurityPrSignal) {
+    add(2, "security signal");
+  }
+
+  const hasPerformancePathSignal = intersects(context.tokens, PERFORMANCE_TOKENS);
+  const hasPerformancePrSignal = intersects(prKeywords.prTokens, PERFORMANCE_TOKENS);
+  if (hasPerformancePathSignal && hasPerformancePrSignal) {
+    add(2, "performance signal");
+  }
+
+  if (
+    role === "source" &&
+    (intersects(context.tokens, PUBLIC_BEHAVIOR_TOKENS) || context.segments.includes("api"))
+  ) {
+    add(1, "public behavior signal");
   }
 
   switch (file.status) {
     case "added":
-      add(5, "new file");
+      add(1, "new file");
       break;
     case "removed":
-      add(3, "removed file");
+      add(1, "removed file");
       break;
+    // Un fichier modifié ou renommé n'apporte pas de signal d'intention en soi.
     case "modified":
-      add(2, "modified file");
-      break;
     case "renamed":
-      add(2, "renamed file");
-      break;
     default:
       break;
   }
 
-  if (file.changes >= 1 && file.changes <= 20) add(2, "small focused diff");
-  else if (file.changes <= 200) add(5, "substantial diff");
-  else if (file.changes <= 800) add(3, "large diff");
-  else add(-2, "very large diff");
+  if (file.changes >= 1 && file.changes <= 20) add(1, "small focused diff");
+  else if (file.changes <= 200) add(2, "substantial diff");
+  else if (file.changes <= 800) add(1, "large diff");
+  else add(-1, "very large diff");
 
-  if (file.patch) add(4, "diff available");
-  else if (file.status !== "removed") add(-6, "diff unavailable");
-
-  if (
-    context.segments.includes("__snapshots__") ||
-    context.path.endsWith(".snap")
-  ) {
-    add(-15, "snapshot support file");
+  if (file.patch && file.patch.trim().length > 0) {
+    add(1, "diff available");
+  } else {
+    reasons.push("no diff available (summary only)");
   }
 
   if (isInDirectory(context, ["fixtures", "fixture"])) {
-    add(-8, "fixture support file");
+    add(-2, "fixture support file");
   }
 
-  if (
-    isInDirectory(context, ["generated", "gen", "__generated__"]) ||
-    context.base.includes(".generated.") ||
-    context.base.endsWith(".g.cs") ||
-    context.base.endsWith(".pb.go")
-  ) {
-    add(-20, "generated-looking source");
-  }
-
-  return { score, reasons, ignored: false, role };
+  return { score, reasons, role, contentPolicy };
 }
 
-export function scoreFile(file: PullRequestFileData): number {
-  return evaluateFile(file).score;
+export function scoreFile(
+  file: PullRequestFileData,
+  context: FileScoreContext = {},
+): number {
+  return evaluateFile(file, buildPrKeywordContext(context)).score;
 }
 
 export function rankFilesByImportance(
   files: PullRequestFileData[],
+  context: FileScoreContext = {},
 ): RankedPullRequestFile[] {
+  const prKeywords = buildPrKeywordContext(context);
+
   return files
     .map((file, originalIndex) => ({
       file,
       originalIndex,
-      ...evaluateFile(file),
+      ...evaluateFile(file, prKeywords),
     }))
     .sort(
       (a, b) =>
@@ -464,15 +597,19 @@ export function rankFilesByImportance(
         a.file.filename.localeCompare(b.file.filename) ||
         a.originalIndex - b.originalIndex,
     )
-    .map(({ file, score, reasons, ignored, role }) => ({
+    .map(({ file, score, reasons, role, contentPolicy }) => ({
       file,
       score,
       reasons,
-      ignored,
       role,
+      contentPolicy,
     }));
 }
 
+// Les rôles préférés ne sont déduits que d'un scope Conventional Commits
+// explicite (docs/test/ci/deps) : un simple "feat:"/"fix:"/"refactor:"/"perf:"
+// est trop générique pour présumer que la PR touche au code, aux tests, à la
+// CI ou à la doc — on laisse les correspondances titre/chemin trancher.
 export function inferPreferredFileRoles(
   pullRequestTitle: string,
 ): PullRequestFileRole[] {
@@ -497,6 +634,9 @@ export function inferPreferredFileRoles(
   if (scopeTokens.some((token) => ["test", "tests"].includes(token))) {
     return ["test"];
   }
+  if (scopeTokens.some((token) => ["ci", "build"].includes(token))) {
+    return ["ci-cd"];
+  }
 
   if (type === "docs" || title.startsWith("documentation:")) {
     return ["documentation"];
@@ -510,9 +650,6 @@ export function inferPreferredFileRoles(
   ) {
     return ["dependency"];
   }
-  if (["feat", "fix", "refactor", "perf"].includes(type ?? "")) {
-    return ["source", "database", "configuration"];
-  }
 
   return [];
 }
@@ -525,15 +662,21 @@ function directoryGroup(filename: string): string {
 
 /**
  * Sélection gloutonne avec rendement décroissant par rôle et répertoire.
- * Elle garde les meilleurs fichiers, sans laisser une grande suite de tests,
- * snapshots ou fixtures évincer le code et la documentation représentatifs.
+ * Seuls les fichiers "include-patch" avec un patch réel peuvent consommer une
+ * place : un lockfile, un snapshot, un fichier généré ou un fichier source
+ * sans diff disponible ne gaspillent jamais un emplacement de la sélection.
  */
 export function selectRepresentativeFiles(
   rankedFiles: RankedPullRequestFile[],
   limit: number,
   preferredRoles: PullRequestFileRole[] = [],
 ): RankedPullRequestFile[] {
-  const remaining = rankedFiles.filter((ranked) => !ranked.ignored);
+  const remaining = rankedFiles.filter(
+    (ranked) =>
+      ranked.contentPolicy === "include-patch" &&
+      typeof ranked.file.patch === "string" &&
+      ranked.file.patch.trim().length > 0,
+  );
   const selected: RankedPullRequestFile[] = [];
   const roleCounts = new Map<PullRequestFileRole, number>();
   const directoryCounts = new Map<string, number>();
@@ -549,9 +692,9 @@ export function selectRepresentativeFiles(
       const directoryCount = directoryCounts.get(group) ?? 0;
       const adjustedScore =
         candidate.score -
-        roleCount * 10 -
-        directoryCount * 3 +
-        (preferredRoles.includes(candidate.role) ? 20 : 0);
+        roleCount * 2 -
+        directoryCount * 1 +
+        (preferredRoles.includes(candidate.role) ? 3 : 0);
 
       if (adjustedScore > bestAdjustedScore) {
         bestAdjustedScore = adjustedScore;
