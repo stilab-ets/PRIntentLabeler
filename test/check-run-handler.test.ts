@@ -17,13 +17,26 @@ const analysis = {
   summary: "Ajoute l'authentification JWT.",
 };
 
-function createMockContext(identifier: string, currentLabels: string[] = []) {
-  const commentBody = `${BOT_COMMENT_MARKER}\n${renderAnalysisDataBlock(analysis)}`;
+const CURRENT_HEAD_SHA = "sha-current";
+
+function createMockContext(
+  identifier: string,
+  currentLabels: string[] = [],
+  options: {
+    commentBody?: string;
+    checkRunHeadSha?: string;
+    prHeadSha?: string;
+  } = {},
+) {
+  const commentBody =
+    options.commentBody ??
+    `${BOT_COMMENT_MARKER}\n${renderAnalysisDataBlock(analysis, CURRENT_HEAD_SHA)}`;
 
   return {
     payload: {
       requested_action: { identifier },
       check_run: {
+        head_sha: options.checkRunHeadSha ?? CURRENT_HEAD_SHA,
         pull_requests: [{ number: 5 }],
       },
       repository: { owner: { login: "org" }, name: "repo" },
@@ -36,7 +49,7 @@ function createMockContext(identifier: string, currentLabels: string[] = []) {
             body: "",
             user: { login: "talip" },
             base: { ref: "main" },
-            head: { ref: "feat/jwt" },
+            head: { ref: "feat/jwt", sha: options.prHeadSha ?? CURRENT_HEAD_SHA },
             html_url: "",
             additions: 30,
             deletions: 2,
@@ -145,5 +158,71 @@ describe("handleCheckRunRequestedAction — labels préfixés par l'icône IA", 
         body: expect.stringContaining(`- [ ] \`${toAiLabelName("bug")}\``),
       }),
     );
+  });
+});
+
+describe("handleCheckRunRequestedAction — protection contre une analyse périmée", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("SHA identique (Check Run + PR actuelle) : l'action est autorisée", async () => {
+    const ctx = createMockContext(ACTION_APPLY_ALL, [], {
+      checkRunHeadSha: "sha-1",
+      prHeadSha: "sha-1",
+      commentBody: `${BOT_COMMENT_MARKER}\n${renderAnalysisDataBlock(analysis, "sha-1")}`,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleCheckRunRequestedAction(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).toHaveBeenCalled();
+  });
+
+  it("SHA différent (nouveau push depuis l'analyse) : aucun label appliqué ni retiré", async () => {
+    const ctx = createMockContext(ACTION_APPLY_ALL, ["bug"], {
+      checkRunHeadSha: "sha-old",
+      prHeadSha: "sha-new",
+      commentBody: `${BOT_COMMENT_MARKER}\n${renderAnalysisDataBlock(analysis, "sha-old")}`,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleCheckRunRequestedAction(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+    expect(ctx.octokit.issues.removeLabel).not.toHaveBeenCalled();
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storedHeadSha: "sha-old" }),
+      expect.stringContaining("stale"),
+    );
+  });
+
+  it("ancien bloc de données sans headSha (v1) : aucun crash, action refusée", async () => {
+    // Simule un ancien commentaire : le blob base64 est directement {suggestions, summary}.
+    const legacyBlock = `<!-- llm-pr-labeler:data ${Buffer.from(
+      JSON.stringify(analysis),
+      "utf8",
+    ).toString("base64")} -->`;
+    const ctx = createMockContext(ACTION_APPLY_ALL, [], {
+      commentBody: `${BOT_COMMENT_MARKER}\n${legacyBlock}`,
+    });
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      handleCheckRunRequestedAction(ctx as any),
+    ).resolves.not.toThrow();
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("identifiant d'action inconnu : aucun changement, même avec un SHA valide", async () => {
+    const ctx = createMockContext("unknown-action", []);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleCheckRunRequestedAction(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+    expect(ctx.octokit.issues.removeLabel).not.toHaveBeenCalled();
+    expect(ctx.octokit.issues.updateComment).not.toHaveBeenCalled();
   });
 });

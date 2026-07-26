@@ -43,8 +43,17 @@ export async function handlePullRequestEvent(
     context.log.info(
       {
         ...logContext,
-        selectedFiles: llmContext.selectedFilesCount,
-        ignoredFiles: llmContext.ignoredFilesCount,
+        selectedFilesCount: llmContext.selectedFilesCount,
+        summaryOnlyFilesCount: llmContext.summaryOnlyFilesCount,
+        // Détail par fichier sélectionné : permet de vérifier immédiatement
+        // qu'un lockfile, un snapshot ou un fichier généré n'est jamais
+        // réellement envoyé au LLM (seul le rôle "include-patch" doit apparaître).
+        selectedFiles: llmContext.selectedFiles.map((ranked) => ({
+          filename: ranked.file.filename,
+          role: ranked.role,
+          score: ranked.score,
+          contentPolicy: ranked.contentPolicy,
+        })),
       },
       "Filtered LLM context built",
     );

@@ -5,6 +5,7 @@ import type {
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import {
   BOT_COMMENT_MARKER,
+  formatFileScore,
   MAX_FILES_IN_COMMENT,
 } from "../utils/constants.js";
 import { toAiLabelName } from "../labels/ai-label-name.js";
@@ -27,14 +28,14 @@ export function buildAnalysisComment(
           .map((ranked) => {
             const f = ranked.file;
             const reasons = ranked.reasons.join(", ") || "—";
-            return `| \`${f.filename}\` | ${f.status} | +${f.additions}/-${f.deletions} | ${ranked.score} | ${reasons} |`;
+            return `| \`${f.filename}\` | ${f.status} | +${f.additions}/-${f.deletions} | ${formatFileScore(ranked.score)} | ${reasons} |`;
           })
           .join("\n")
       : "| _Aucun fichier sélectionné_ | | | | |";
 
   const filesSection = `### Fichiers sélectionnés pour l'analyse
 
-> Les fichiers ci-dessous ont été sélectionnés automatiquement par le backend et utilisés pour construire le contexte envoyé au LLM.
+> Les fichiers ci-dessous ont été sélectionnés automatiquement par le backend et utilisés pour construire le contexte envoyé au LLM. Le score est une priorité interne de tri (diagnostic), il n'est jamais envoyé au LLM.
 
 | Fichier | Statut | Changements | Score | Raisons |
 |---|---|---|---|---|
@@ -47,7 +48,9 @@ ${selectedTable}`;
       ? `\n###  Résumé\n\n${analysis.summary}\n`
       : "";
 
-  const dataBlock = analysis ? `\n${renderAnalysisDataBlock(analysis)}` : "";
+  const dataBlock = analysis
+    ? `\n${renderAnalysisDataBlock(analysis, prData.headSha)}`
+    : "";
 
   return `${BOT_COMMENT_MARKER}
 ##  LLM PR Labeler — Analyse
@@ -64,7 +67,7 @@ L'application a bien reçu et analysé cette Pull Request.
 | Changements | +${prData.additions} / -${prData.deletions} |
 | Fichiers modifiés | ${prData.changedFilesCount} |
 | Fichiers analysés par le LLM | ${context.selectedFilesCount} |
-| Fichiers ignorés | ${context.ignoredFilesCount} |
+| Fichiers résumés seulement (lockfile/snapshot/généré) | ${context.summaryOnlyFilesCount} |
 
 ${filesSection}
 
