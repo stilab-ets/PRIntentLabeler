@@ -13,7 +13,7 @@ function createMockContext() {
         body: "",
         user: { login: "talip" },
         base: { ref: "main" },
-        head: { ref: "feat/jwt" },
+        head: { ref: "feat/jwt", sha: "sha-jwt" },
         html_url: "",
         additions: 30,
         deletions: 2,

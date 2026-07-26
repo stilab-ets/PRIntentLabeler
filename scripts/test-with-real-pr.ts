@@ -91,7 +91,7 @@ async function fetchPrData(
       body: string | null;
       user: { login: string } | null;
       base: { ref: string };
-      head: { ref: string };
+      head: { ref: string; sha: string };
       html_url: string;
       additions: number;
       deletions: number;
@@ -135,6 +135,7 @@ async function fetchPrData(
     author: pr.user?.login ?? "unknown",
     baseBranch: pr.base.ref,
     headBranch: pr.head.ref,
+    headSha: pr.head.sha,
     htmlUrl: pr.html_url,
     additions: pr.additions,
     deletions: pr.deletions,
@@ -166,13 +167,16 @@ console.log(`   Labels repo : ${prData.repositoryLabels.join(", ") || "(aucun)"}
 const llmContext = buildPullRequestLlmContext(prData);
 
 console.log(`🔍 Contexte filtré :`);
-console.log(`   Fichiers sélectionnés : ${llmContext.selectedFilesCount}`);
-console.log(`   Fichiers ignorés      : ${llmContext.ignoredFilesCount}`);
+console.log(`   Fichiers sélectionnés  : ${llmContext.selectedFilesCount}`);
+console.log(`   Fichiers résumés seulement : ${llmContext.summaryOnlyFilesCount}`);
 console.log(`   Résumé (${llmContext.allFilesSummary.length} fichiers) :\n`);
 
 for (const f of llmContext.allFilesSummary.slice(0, 10)) {
-  const tag = f.ignored ? " [ignoré]" : ` [score ${f.score}]`;
-  console.log(`   ${f.ignored ? "✗" : "✓"} ${f.filename}${tag}`);
+  const tag =
+    f.contentPolicy === "summary-only"
+      ? " [résumé seulement]"
+      : ` [score ${f.score} pts]`;
+  console.log(`   ${f.contentPolicy === "summary-only" ? "✗" : "✓"} ${f.filename}${tag}`);
 }
 if (llmContext.allFilesSummary.length > 10) {
   console.log(`   ... et ${llmContext.allFilesSummary.length - 10} autre(s) fichier(s)`);

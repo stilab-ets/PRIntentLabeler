@@ -20,7 +20,7 @@ type GitHubPullRequest = {
   body: string | null;
   user: { login: string } | null;
   base: { ref: string };
-  head: { ref: string };
+  head: { ref: string; sha: string };
   html_url: string;
   additions: number;
   deletions: number;
@@ -109,6 +109,7 @@ async function fetchPullRequestData(url: string): Promise<PullRequestData> {
     author: pullRequest.user?.login ?? "unknown",
     baseBranch: pullRequest.base.ref,
     headBranch: pullRequest.head.ref,
+    headSha: pullRequest.head.sha,
     htmlUrl: pullRequest.html_url,
     additions: pullRequest.additions,
     deletions: pullRequest.deletions,
@@ -135,7 +136,7 @@ for (const url of urls) {
   console.log(`${data.title}`);
   console.log(`Labels: ${data.pullRequestLabels.join(", ") || "(aucun)"}`);
   console.log(
-    `Fichiers: ${data.changedFilesCount}; sélectionnés: ${context.selectedFilesCount}; ignorés: ${context.ignoredFilesCount}`,
+    `Fichiers: ${data.changedFilesCount}; sélectionnés: ${context.selectedFilesCount}; résumés seulement: ${context.summaryOnlyFilesCount}`,
   );
 
   for (const selected of context.selectedFiles) {

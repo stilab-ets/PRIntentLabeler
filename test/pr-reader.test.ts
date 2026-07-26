@@ -10,7 +10,7 @@ function createMockContext(overrides: Record<string, unknown> = {}) {
         body: "Closes #1",
         user: { login: "mehdi" },
         base: { ref: "main" },
-        head: { ref: "fix-login" },
+        head: { ref: "fix-login", sha: "sha-fix-login" },
         html_url: "https://github.com/org/repo/pull/42",
         additions: 25,
         deletions: 5,
@@ -78,6 +78,7 @@ describe("readPullRequestData", () => {
     expect(result.author).toBe("mehdi");
     expect(result.baseBranch).toBe("main");
     expect(result.headBranch).toBe("fix-login");
+    expect(result.headSha).toBe("sha-fix-login");
   });
 
   it("extrait correctement les fichiers modifiés", async () => {
