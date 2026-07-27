@@ -17,10 +17,24 @@ const analysis: PullRequestAnalysis = {
 };
 
 describe("bloc data du commentaire", () => {
-  it("encode puis décode l'analyse et le headSha sans perte (v2)", () => {
-    const block = renderAnalysisDataBlock(analysis, "sha-123");
-    const parsed = parseAnalysisDataBlock(`du texte\n${block}\nautre texte`);
-    expect(parsed).toEqual({ version: 2, headSha: "sha-123", analysis });
+  it("signe puis vérifie l'analyse et le headSha sans perte", () => {
+    const block = renderAnalysisDataBlock(analysis, "sha-123", "secret");
+    const parsed = parseAnalysisDataBlock(
+      `du texte\n${block}\nautre texte`,
+      "secret",
+    );
+    expect(parsed).toEqual({
+      version: 3,
+      headSha: "sha-123",
+      analysis,
+      verified: true,
+    });
+  });
+
+  it("rejette un bloc signé qui a été modifié", () => {
+    const block = renderAnalysisDataBlock(analysis, "sha-123", "secret");
+    const tampered = block.replace("a", "b");
+    expect(parseAnalysisDataBlock(tampered, "secret")).toBeNull();
   });
 
   it("retourne null si aucun bloc data", () => {
@@ -34,7 +48,12 @@ describe("bloc data du commentaire", () => {
     ).toString("base64")} -->`;
 
     const parsed = parseAnalysisDataBlock(legacyBlock);
-    expect(parsed).toEqual({ version: 1, headSha: null, analysis });
+    expect(parsed).toEqual({
+      version: 1,
+      headSha: null,
+      analysis,
+      verified: false,
+    });
   });
 
   it("retourne null pour un blob base64 invalide", () => {

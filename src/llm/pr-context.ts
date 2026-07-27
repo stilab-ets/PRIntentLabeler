@@ -1,7 +1,7 @@
 import type {
+  FileRoleSummary,
   PullRequestData,
   PullRequestLlmContext,
-  FileRoleSummary,
   RankedFileSummary,
   RankedPullRequestFile,
 } from "../domain/pull-request-data.js";
@@ -11,6 +11,7 @@ import {
   MAX_ALL_FILES_SUMMARY,
   MAX_FILES_FOR_LLM,
   MAX_LLM_CONTEXT_TOKENS,
+  MAX_PATCH_LINES_PER_FILE,
   MAX_PATCH_TOKENS_PER_FILE,
   MAX_REPOSITORY_LABELS_FOR_LLM,
   MAX_TOTAL_PATCH_TOKENS,
@@ -20,12 +21,17 @@ import {
   rankFilesByImportance,
   selectRepresentativeFiles,
 } from "./file-selector.js";
-import { estimateTokens, truncateFilePatch } from "./patch-utils.js";
+import { estimateTokens, truncatePatch } from "./patch-utils.js";
 import {
+  buildClassificationPrompt,
   buildClassificationPromptWithoutPatches,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
 import { selectCandidateLabels } from "./label-selector.js";
+
+type BuildContextOptions = {
+  representativeFiles?: RankedPullRequestFile[];
+};
 
 function buildFileRoleSummary(
   ranked: RankedPullRequestFile[],
@@ -36,9 +42,6 @@ function buildFileRoleSummary(
   >();
 
   for (const rankedFile of ranked) {
-    // Le bruit généré/binaire n'apporte aucun signal utile ; en revanche un
-    // lockfile (dependency) ou un snapshot (test) "summary-only" reste compté
-    // ici, car il révèle bien une intention (ex. "cette PR touche aux deps").
     if (rankedFile.role === "generated") continue;
 
     const current = roleTotals.get(rankedFile.role) ?? { files: 0, changes: 0 };
@@ -52,59 +55,94 @@ function buildFileRoleSummary(
     .sort((a, b) => b.changes - a.changes || b.files - a.files);
 }
 
-// Budget réel disponible pour les patches : dérivé du budget total du prompt
-// moins tout ce qui n'est pas un patch (system prompt, métadonnées, labels,
-// résumés de fichiers...) et la réserve pour la réponse du LLM. On rend le
-// prompt réel "sans patches" pour l'estimer, au lieu de dupliquer sa structure.
-function computeAvailablePatchTokens(
-  contextWithoutPatches: PullRequestLlmContext,
-): number {
-  const systemPrompt = buildClassificationSystemPrompt();
-  const userPromptWithoutPatches = buildClassificationPromptWithoutPatches(
-    contextWithoutPatches,
+export function allocatePatchTokenBudgets(
+  naturalTokenDemands: number[],
+  totalBudget: number,
+  perFileLimit: number = MAX_PATCH_TOKENS_PER_FILE,
+): number[] {
+  if (naturalTokenDemands.length === 0) return [];
+
+  const safeBudget = Math.max(0, Math.floor(totalBudget));
+  const cappedDemands = naturalTokenDemands.map((demand) =>
+    Math.max(0, Math.min(Math.ceil(demand), perFileLimit)),
   );
-  const nonPatchTokens =
-    estimateTokens(systemPrompt) + estimateTokens(userPromptWithoutPatches);
+  const fairShare = Math.floor(safeBudget / naturalTokenDemands.length);
+  const allocations = cappedDemands.map((demand) =>
+    Math.min(demand, fairShare),
+  );
 
-  const budget =
-    MAX_LLM_CONTEXT_TOKENS - LLM_RESPONSE_TOKEN_RESERVE - nonPatchTokens;
+  let remaining =
+    safeBudget - allocations.reduce((sum, value) => sum + value, 0);
+  for (let index = 0; index < allocations.length && remaining > 0; index += 1) {
+    const unmetDemand = cappedDemands[index] - allocations[index];
+    const extra = Math.min(unmetDemand, remaining);
+    allocations[index] += extra;
+    remaining -= extra;
+  }
 
-  return Math.max(0, Math.min(MAX_TOTAL_PATCH_TOKENS, budget));
+  return allocations;
+}
+
+function estimateNonPatchTokens(context: PullRequestLlmContext): number {
+  return (
+    estimateTokens(buildClassificationSystemPrompt()) +
+    estimateTokens(buildClassificationPromptWithoutPatches(context))
+  );
+}
+
+function availablePatchTokens(nonPatchTokens: number): number {
+  return Math.max(
+    0,
+    Math.min(
+      MAX_TOTAL_PATCH_TOKENS,
+      MAX_LLM_CONTEXT_TOKENS - LLM_RESPONSE_TOKEN_RESERVE - nonPatchTokens,
+    ),
+  );
+}
+
+function emptyPromptBudget(): PullRequestLlmContext["promptBudget"] {
+  return {
+    contextLimitTokens: MAX_LLM_CONTEXT_TOKENS,
+    responseReserveTokens: LLM_RESPONSE_TOKEN_RESERVE,
+    nonPatchEstimatedTokens: 0,
+    availablePatchTokens: 0,
+    allocatedPatchTokens: 0,
+    finalPromptEstimatedTokens: 0,
+    files: [],
+  };
 }
 
 export function buildPullRequestLlmContext(
   prData: PullRequestData,
+  options: BuildContextOptions = {},
 ): PullRequestLlmContext {
   const ranked = rankFilesByImportance(prData.files, {
     title: prData.title,
     body: prData.body,
   });
 
-  const summaryOnlyFilesCount = ranked.filter(
-    (r) => r.contentPolicy === "summary-only",
-  ).length;
+  const representativeFiles = (
+    options.representativeFiles ??
+    selectRepresentativeFiles(
+      ranked,
+      MAX_FILES_FOR_LLM,
+      inferPreferredFileRoles(prData.title),
+    )
+  ).slice(0, MAX_FILES_FOR_LLM);
 
-  const representativeFiles = selectRepresentativeFiles(
-    ranked,
-    MAX_FILES_FOR_LLM,
-    inferPreferredFileRoles(prData.title),
-  );
-
-  // Résumé global : tous les fichiers (sans patch), limité pour rester compact.
   const allFilesSummary: RankedFileSummary[] = ranked
     .slice(0, MAX_ALL_FILES_SUMMARY)
-    .map((r) => ({
-      filename: r.file.filename,
-      status: r.file.status,
-      additions: r.file.additions,
-      deletions: r.file.deletions,
-      changes: r.file.changes,
-      score: r.score,
-      role: r.role,
-      contentPolicy: r.contentPolicy,
+    .map((rankedFile) => ({
+      filename: rankedFile.file.filename,
+      status: rankedFile.file.status,
+      additions: rankedFile.file.additions,
+      deletions: rankedFile.file.deletions,
+      changes: rankedFile.file.changes,
+      score: rankedFile.score,
+      role: rankedFile.role,
+      contentPolicy: rankedFile.contentPolicy,
+      contentReason: rankedFile.contentReason,
     }));
-
-  const fileRoleSummary = buildFileRoleSummary(ranked);
 
   const repositoryLabelDescriptions = prData.repositoryLabelDescriptions ?? {};
   const repositoryLabels = selectCandidateLabels(
@@ -114,10 +152,7 @@ export function buildPullRequestLlmContext(
   );
 
   const contextWithoutPatches: PullRequestLlmContext = {
-    repository: {
-      owner: prData.owner,
-      repo: prData.repo,
-    },
+    repository: { owner: prData.owner, repo: prData.repo },
     pullRequest: {
       number: prData.number,
       title: prData.title,
@@ -135,32 +170,82 @@ export function buildPullRequestLlmContext(
     repositoryLabels,
     repositoryLabelDescriptions,
     allFilesSummary,
-    fileRoleSummary,
-    selectedFiles: representativeFiles.map((r) => ({
-      ...r,
-      file: { ...r.file, patch: undefined },
+    fileRoleSummary: buildFileRoleSummary(ranked),
+    selectedFiles: representativeFiles.map((rankedFile) => ({
+      ...rankedFile,
+      file: { ...rankedFile.file, patch: "" },
     })),
-    summaryOnlyFilesCount,
+    summaryOnlyFilesCount: ranked.filter(
+      (rankedFile) => rankedFile.contentPolicy === "summary-only",
+    ).length,
     omittedFilesCount: Math.max(0, ranked.length - allFilesSummary.length),
     selectedFilesCount: representativeFiles.length,
+    promptBudget: emptyPromptBudget(),
   };
 
-  const availablePatchTokens = computeAvailablePatchTokens(contextWithoutPatches);
-
-  // Budget partagé : le plafond global protège le TPM, tandis que le plafond
-  // par fichier empêche un seul diff d'écraser les autres exemples.
-  let remainingPatchTokens = availablePatchTokens;
-  const selectedFiles: RankedPullRequestFile[] = representativeFiles.map(
-    (rankedFile, index) => {
-      const remainingFiles = representativeFiles.length - index;
-      const fairShare = Math.floor(remainingPatchTokens / remainingFiles);
-      const tokenBudget = Math.min(MAX_PATCH_TOKENS_PER_FILE, fairShare);
-      const charBudget = tokenBudget * ESTIMATED_CHARS_PER_TOKEN;
-      const file = truncateFilePatch(rankedFile.file, undefined, charBudget);
-      remainingPatchTokens -= estimateTokens(file.patch);
-      return { ...rankedFile, file };
-    },
+  const nonPatchEstimatedTokens = estimateNonPatchTokens(contextWithoutPatches);
+  const patchBudget = availablePatchTokens(nonPatchEstimatedTokens);
+  const lineLimitedPatches = representativeFiles.map((rankedFile) =>
+    truncatePatch(
+      rankedFile.file.patch,
+      MAX_PATCH_LINES_PER_FILE,
+      Number.MAX_SAFE_INTEGER,
+    ),
+  );
+  const naturalTokenDemands = lineLimitedPatches.map((patch) =>
+    estimateTokens(patch),
+  );
+  const allocations = allocatePatchTokenBudgets(
+    naturalTokenDemands,
+    patchBudget,
   );
 
-  return { ...contextWithoutPatches, selectedFiles };
+  const selectedFiles = representativeFiles.map((rankedFile, index) => {
+    const sourcePatch = lineLimitedPatches[index] ?? "";
+    const patch = truncatePatch(
+      sourcePatch,
+      Number.MAX_SAFE_INTEGER,
+      allocations[index] * ESTIMATED_CHARS_PER_TOKEN,
+    );
+
+    return {
+      ...rankedFile,
+      file: { ...rankedFile.file, patch },
+    };
+  });
+
+  const allocationFiles = selectedFiles.map((rankedFile, index) => {
+    const actualTokens = estimateTokens(rankedFile.file.patch);
+    return {
+      filename: rankedFile.file.filename,
+      naturalTokens: naturalTokenDemands[index],
+      allocatedTokens: allocations[index],
+      actualTokens,
+      truncated:
+        rankedFile.file.patch !== representativeFiles[index].file.patch,
+    };
+  });
+
+  const context: PullRequestLlmContext = {
+    ...contextWithoutPatches,
+    selectedFiles,
+    promptBudget: {
+      contextLimitTokens: MAX_LLM_CONTEXT_TOKENS,
+      responseReserveTokens: LLM_RESPONSE_TOKEN_RESERVE,
+      nonPatchEstimatedTokens,
+      availablePatchTokens: patchBudget,
+      allocatedPatchTokens: allocationFiles.reduce(
+        (sum, file) => sum + file.actualTokens,
+        0,
+      ),
+      finalPromptEstimatedTokens: 0,
+      files: allocationFiles,
+    },
+  };
+
+  context.promptBudget.finalPromptEstimatedTokens =
+    estimateTokens(buildClassificationSystemPrompt()) +
+    estimateTokens(buildClassificationPrompt(context));
+
+  return context;
 }

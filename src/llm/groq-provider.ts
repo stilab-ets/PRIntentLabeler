@@ -7,14 +7,31 @@ import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
+import { estimateTokens } from "./patch-utils.js";
+
+export type GroqUsageMetrics = {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedPromptTokens: number;
+  absolutePromptTokenError: number;
+  promptTokenErrorPercentage: number;
+};
 
 export class GroqProvider implements LlmProvider {
   private client: Groq;
   private model: string;
+  private onUsage?: (metrics: GroqUsageMetrics) => void;
 
-  constructor(apiKey: string, model = "llama-3.1-8b-instant") {
+  constructor(
+    apiKey: string,
+    model = "llama-3.1-8b-instant",
+    onUsage?: (metrics: GroqUsageMetrics) => void,
+  ) {
     this.client = new Groq({ apiKey });
     this.model = model;
+    this.onUsage = onUsage;
   }
 
   async classifyPullRequest(
@@ -22,6 +39,21 @@ export class GroqProvider implements LlmProvider {
   ): Promise<PullRequestAnalysis> {
     const systemPrompt = buildClassificationSystemPrompt();
     const prompt = buildClassificationPrompt(context);
+    return this.classifyWithPrompt(systemPrompt, prompt);
+  }
+
+  async classifyPullRequestWithPrompt(
+    prompt: string,
+  ): Promise<PullRequestAnalysis> {
+    return this.classifyWithPrompt(buildClassificationSystemPrompt(), prompt);
+  }
+
+  private async classifyWithPrompt(
+    systemPrompt: string,
+    prompt: string,
+  ): Promise<PullRequestAnalysis> {
+    const estimatedPromptTokens =
+      estimateTokens(systemPrompt) + estimateTokens(prompt);
 
     let response;
     try {
@@ -44,6 +76,30 @@ export class GroqProvider implements LlmProvider {
         );
       }
       throw err;
+    }
+
+    const usage = response.usage;
+    if (
+      usage &&
+      typeof usage.prompt_tokens === "number" &&
+      typeof usage.completion_tokens === "number" &&
+      typeof usage.total_tokens === "number"
+    ) {
+      const absolutePromptTokenError = Math.abs(
+        usage.prompt_tokens - estimatedPromptTokens,
+      );
+      this.onUsage?.({
+        model: this.model,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        totalTokens: usage.total_tokens,
+        estimatedPromptTokens,
+        absolutePromptTokenError,
+        promptTokenErrorPercentage:
+          usage.prompt_tokens === 0
+            ? 0
+            : (absolutePromptTokenError / usage.prompt_tokens) * 100,
+      });
     }
 
     const content = response.choices[0]?.message?.content ?? "{}";
