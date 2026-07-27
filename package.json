@@ -19,6 +19,7 @@
     "format:check": "prettier --check \"{src,test,scripts}/**/*.ts\""
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.22.0",
     "probot": "^13.4.5"
