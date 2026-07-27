@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renderSettingsPage } from "../src/http/settings-page.js";
+import {
+  renderSettingsClientScript,
+  renderSettingsPage,
+} from "../src/http/settings-page.js";
 
 describe("renderSettingsPage", () => {
   it("masque la clé actuelle et échappe les valeurs dynamiques", () => {
@@ -26,5 +29,13 @@ describe("renderSettingsPage", () => {
     expect(html).toContain("terminant par <code>1234</code>");
     expect(html).not.toContain("sk-secret");
     expect(html).toContain("Laisser vide pour conserver la clé actuelle");
+  });
+
+  it("encode correctement le formulaire de test de connexion", () => {
+    const script = renderSettingsClientScript();
+
+    expect(script).toContain(
+      "new URLSearchParams(new FormData(form))",
+    );
   });
 });
