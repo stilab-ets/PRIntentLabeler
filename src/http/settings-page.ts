@@ -209,7 +209,7 @@ if (form) {
     try {
       const response = await fetch(form.dataset.testUrl, {
         method: "POST",
-        body: new FormData(form),
+        body: new URLSearchParams(new FormData(form)),
         headers: { Accept: "application/json" }
       });
       const payload = await response.json();

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import "dotenv/config";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {

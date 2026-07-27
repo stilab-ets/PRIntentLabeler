@@ -294,7 +294,7 @@ export function registerConfigurationRoutes(router: Router): void {
       const token = readCookie(req, SESSION_COOKIE);
       const session = oauth && token ? await oauth.getSession(token) : null;
       const installationId = parsePositiveInteger(req.params.installationId);
-      const body = req.body as Record<string, unknown>;
+      const body = (req.body ?? {}) as Record<string, unknown>;
 
       if (
         !session ||
