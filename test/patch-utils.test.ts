@@ -121,7 +121,7 @@ describe("truncatePatch", () => {
 
     const patch = [hunk(1), hunk(20), hunk(40), hunk(60)].join("\n");
     const result = truncatePatch(patch, 15, 10_000);
-    expect(result!.split("\n").length).toBeLessThanOrEqual(16); // +1 pour le marqueur éventuel
+    expect(result!.split("\n").length).toBeLessThanOrEqual(15);
   });
 
   it("est déterministe (même entrée -> même sortie)", () => {

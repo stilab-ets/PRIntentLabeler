@@ -54,6 +54,7 @@ export type RankedPullRequestFile = {
   reasons: string[];
   role: PullRequestFileRole;
   contentPolicy: FileContentPolicy;
+  contentReason?: string;
 };
 
 // Résumé léger (sans patch) d'un fichier, utilisé dans le contexte global.
@@ -66,6 +67,7 @@ export type RankedFileSummary = {
   score: number;
   role: PullRequestFileRole;
   contentPolicy: FileContentPolicy;
+  contentReason?: string;
 };
 
 export type FileRoleSummary = {
@@ -104,4 +106,19 @@ export type PullRequestLlmContext = {
   summaryOnlyFilesCount: number;
   omittedFilesCount: number;
   selectedFilesCount: number;
+  promptBudget: {
+    contextLimitTokens: number;
+    responseReserveTokens: number;
+    nonPatchEstimatedTokens: number;
+    availablePatchTokens: number;
+    allocatedPatchTokens: number;
+    finalPromptEstimatedTokens: number;
+    files: {
+      filename: string;
+      naturalTokens: number;
+      allocatedTokens: number;
+      actualTokens: number;
+      truncated: boolean;
+    }[];
+  };
 };

@@ -34,9 +34,11 @@ function truncateByLinesHeadTail(lines: string[], maxLines: number): string {
   const remaining = lines.length - headCount - tailCount;
   const marker = `... (${remaining} more lines truncated) ...`;
 
-  return [...lines.slice(0, headCount), marker, ...lines.slice(-tailCount)].join(
-    "\n",
-  );
+  return [
+    ...lines.slice(0, headCount),
+    marker,
+    ...lines.slice(-tailCount),
+  ].join("\n");
 }
 
 const HUNK_HEADER_REGEX = /^@@ .*@@/;
@@ -113,56 +115,70 @@ function compactHunkLines(lines: string[]): string[] {
 }
 
 /**
- * Répartit maxLines entre les hunks quand la compaction seule ne suffit pas.
- * Chaque hunk retenu garde son header et TOUTES ses lignes +/-  (jamais
- * sacrifiées) ; seules les lignes de contexte restantes sont coupées pour
- * respecter le budget. C'est ce qui garantit qu'un changement important situé
- * au milieu d'un gros patch multi-hunks reste toujours visible.
+ * Répartit le budget entre les hunks et priorise leurs lignes modifiées.
  */
 function redistributeAcrossHunks(
-  preamble: string[],
+  _preamble: string[],
   hunks: Hunk[],
   maxLines: number,
 ): string[] {
-  const budgetForHunks = Math.max(hunks.length, maxLines - preamble.length);
-  const perHunk = Math.max(2, Math.floor(budgetForHunks / hunks.length));
+  if (maxLines <= 0 || hunks.length === 0) return [];
 
-  const result: string[] = [...preamble];
-  for (const hunk of hunks) {
-    result.push(hunk.header);
-    const changeLines = hunk.lines.filter(isChangedLine);
-    const contextBudget = Math.max(0, perHunk - 1 - changeLines.length);
-    let contextUsed = 0;
+  const markerBudget = maxLines >= 4 ? 1 : 0;
+  const contentBudget = maxLines - markerBudget;
+  const maxRepresentedHunks = Math.max(
+    1,
+    Math.min(hunks.length, Math.floor(contentBudget / 2) || 1),
+  );
+  const selectedIndexes =
+    maxRepresentedHunks === 1
+      ? [0]
+      : Array.from({ length: maxRepresentedHunks }, (_, index) =>
+          Math.round((index * (hunks.length - 1)) / (maxRepresentedHunks - 1)),
+        );
+  const selected = selectedIndexes.map((index) => hunks[index]);
+  const chosenLineIndexes = selected.map(() => new Set<number>());
+  const candidates = selected.map((hunk) => [
+    ...hunk.lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => isChangedLine(line))
+      .map(({ index }) => index),
+    ...hunk.lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => !isChangedLine(line))
+      .map(({ index }) => index),
+  ]);
 
-    for (const line of hunk.lines) {
-      if (isChangedLine(line)) {
-        result.push(line);
-      } else if (contextUsed < contextBudget) {
-        result.push(line);
-        contextUsed += 1;
-      }
+  let remaining = Math.max(0, contentBudget - selected.length);
+  let cursor = 0;
+  while (
+    remaining > 0 &&
+    candidates.some((candidate) => candidate.length > 0)
+  ) {
+    const candidate = candidates[cursor % candidates.length];
+    const next = candidate.shift();
+    if (next !== undefined) {
+      chosenLineIndexes[cursor % candidates.length].add(next);
+      remaining -= 1;
     }
+    cursor += 1;
   }
 
-  if (result.length > maxLines) {
-    const overflow = result.length - maxLines;
-    const trimmed = result.slice(0, maxLines);
-    trimmed.push(`... (${overflow} more lines truncated) ...`);
-    return trimmed;
-  }
+  const result: string[] = [];
+  selected.forEach((hunk, index) => {
+    result.push(hunk.header);
+    const chosen = chosenLineIndexes[index];
+    hunk.lines.forEach((line, lineIndex) => {
+      if (chosen.has(lineIndex)) result.push(line);
+    });
+  });
 
-  return result;
+  if (markerBudget > 0) result.push("... (additional diff lines omitted) ...");
+  return result.slice(0, maxLines);
 }
 
-// Troncature "consciente des hunks Git" : contrairement à une coupe tête/queue
-// aveugle, elle garde les headers de hunk, priorise les lignes +/- (jamais
-// sacrifiées), et répartit le budget de lignes entre tous les hunks au lieu de
-// privilégier uniquement le début du patch. Déterministe : mêmes entrées,
-// même sortie.
-function truncatePatchByHunks(
-  patch: string,
-  maxLines: number,
-): string {
+// Troncature consciente des hunks Git, avec répartition déterministe.
+function truncatePatchByHunks(patch: string, maxLines: number): string {
   const { preamble, hunks } = splitIntoHunks(patch);
 
   if (hunks.length === 0) {

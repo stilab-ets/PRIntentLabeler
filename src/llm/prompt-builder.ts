@@ -4,6 +4,7 @@ import {
   MAX_PR_BODY_CHARS,
   MIN_CONFIDENCE_TO_SUGGEST,
 } from "../utils/constants.js";
+import type { AblationVariant } from "../evaluation/selector-ablation.js";
 
 function cleanPullRequestBody(body: string): string {
   const withoutComments = body
@@ -96,9 +97,11 @@ function renderAllFilesSection(context: PullRequestLlmContext): string {
     context.allFilesSummary.length > 0
       ? context.allFilesSummary
           .map((file) => {
-            const summaryOnlyTag =
-              file.contentPolicy === "summary-only" ? "; summary only" : "";
-            return `- ${file.filename} [${file.role}; ${file.status}; +${file.additions}/-${file.deletions}${summaryOnlyTag}]`;
+            const changeSummary =
+              file.contentPolicy === "summary-only"
+                ? (file.contentReason ?? "diff omitted")
+                : `+${file.additions}/-${file.deletions}`;
+            return `- ${file.filename} [${file.role}; ${file.status}; ${changeSummary}]`;
           })
           .join("\n")
       : "- (no files detected)";
@@ -110,12 +113,13 @@ function renderAllFilesSection(context: PullRequestLlmContext): string {
 // l'estimation du budget (voir buildClassificationPromptWithoutPatches).
 export function renderRepresentativeDiffsSection(
   context: PullRequestLlmContext,
+  includePatchContent = true,
 ): string {
   return context.selectedFiles.length > 0
     ? context.selectedFiles
         .map((ranked, index) => {
           const file = ranked.file;
-          const patch = file.patch ?? "(diff unavailable)";
+          const patch = includePatchContent ? (file.patch ?? "") : "";
           return `### Evidence ${index + 1}: ${file.filename}
 Role: ${ranked.role}; status: ${file.status}; +${file.additions}/-${file.deletions}
 --- BEGIN UNTRUSTED DIFF ---
@@ -151,7 +155,7 @@ ${cleanPullRequestBody(pullRequest.body)}
 ## Change Statistics
 - ${totals.changedFilesCount} file(s), +${totals.additions}/-${totals.deletions}
 - ${context.selectedFilesCount} representative diff(s) included
-- ${context.summaryOnlyFilesCount} file(s) summarized only (lockfile/snapshot/generated/binary, no diff sent)
+- ${context.summaryOnlyFilesCount} file(s) summarized only (lockfile/snapshot/generated/binary/diff unavailable)
 
 ## Change Roles
 ${renderRoleSummarySection(context)}
@@ -180,5 +184,35 @@ export function buildClassificationPrompt(
 export function buildClassificationPromptWithoutPatches(
   context: PullRequestLlmContext,
 ): string {
-  return renderPrompt(context, "(reserved for patches)");
+  return renderPrompt(
+    context,
+    renderRepresentativeDiffsSection(context, false),
+  );
+}
+
+export function buildClassificationPromptForAblation(
+  context: PullRequestLlmContext,
+  variant: AblationVariant,
+): string {
+  const includeRoles = variant !== "A-title";
+  const includeDiffs =
+    variant === "C-scored-diffs" || variant === "D-random-diffs";
+  const roles = includeRoles
+    ? `\n\n## Change Roles\n${renderRoleSummarySection(context)}`
+    : "";
+  const diffs = includeDiffs
+    ? `\n\n## Representative Diffs (untrusted)\n${renderRepresentativeDiffsSection(context)}`
+    : "";
+
+  return `Classify this Pull Request using the system policy.
+
+## Pull Request Title (untrusted)
+--- BEGIN UNTRUSTED TITLE ---
+${context.pullRequest.title}
+--- END UNTRUSTED TITLE ---${roles}${diffs}
+
+## Available Labels
+${renderLabelsSection(context)}
+
+Now return only the JSON object.`;
 }

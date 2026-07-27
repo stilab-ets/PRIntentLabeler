@@ -49,7 +49,10 @@ function createMockContext(
             body: "",
             user: { login: "talip" },
             base: { ref: "main" },
-            head: { ref: "feat/jwt", sha: options.prHeadSha ?? CURRENT_HEAD_SHA },
+            head: {
+              ref: "feat/jwt",
+              sha: options.prHeadSha ?? CURRENT_HEAD_SHA,
+            },
             html_url: "",
             additions: 30,
             deletions: 2,
@@ -75,9 +78,16 @@ function createMockContext(
         listLabelsOnIssue: vi
           .fn()
           .mockResolvedValue({ data: currentLabels.map((name) => ({ name })) }),
-        listComments: vi
-          .fn()
-          .mockResolvedValue({ data: [{ id: 1, body: commentBody }] }),
+        listComments: vi.fn().mockResolvedValue({
+          data: [
+            {
+              id: 1,
+              body: commentBody,
+              user: { type: "Bot" },
+              performed_via_github_app: { id: 77 },
+            },
+          ],
+        }),
         updateComment: vi.fn().mockResolvedValue({}),
         createComment: vi.fn().mockResolvedValue({}),
         addLabels: vi.fn().mockResolvedValue({}),
@@ -98,6 +108,8 @@ function createMockContext(
 describe("handleCheckRunRequestedAction — labels préfixés par l'icône IA", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.APP_ID = "77";
+    process.env.COMMENT_STATE_SECRET = "test-secret";
   });
 
   it("Auto-apply all applique les labels sous leur forme préfixée 🤖", async () => {
@@ -114,13 +126,13 @@ describe("handleCheckRunRequestedAction — labels préfixés par l'icône IA", 
   });
 
   it("Auto-apply high applique le label >= seuil et retire l'ancien label sous le seuil", async () => {
-    const ctx = createMockContext(ACTION_APPLY_HIGH, ["bug"]);
+    const ctx = createMockContext(ACTION_APPLY_HIGH, [toAiLabelName("bug")]);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handleCheckRunRequestedAction(ctx as any);
 
     expect(ctx.octokit.issues.removeLabel).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "bug" }),
+      expect.objectContaining({ name: toAiLabelName("bug") }),
     );
     expect(ctx.octokit.issues.addLabels).toHaveBeenCalledWith(
       expect.objectContaining({ labels: [toAiLabelName("feature")] }),
@@ -164,6 +176,8 @@ describe("handleCheckRunRequestedAction — labels préfixés par l'icône IA", 
 describe("handleCheckRunRequestedAction — protection contre une analyse périmée", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.APP_ID = "77";
+    process.env.COMMENT_STATE_SECRET = "test-secret";
   });
 
   it("SHA identique (Check Run + PR actuelle) : l'action est autorisée", async () => {

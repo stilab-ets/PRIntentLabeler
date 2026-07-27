@@ -99,13 +99,13 @@ describe("handlePullRequestEvent — chemin LLM", () => {
     const ctx = createMockContext();
     ctx.octokit.issues.listLabelsOnIssue = vi
       .fn()
-      .mockResolvedValue({ data: [{ name: "bug" }] });
+      .mockResolvedValue({ data: [{ name: toAiLabelName("bug") }] });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handlePullRequestEvent(ctx as any, mockProvider());
 
     expect(ctx.octokit.issues.removeLabel).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "bug" }),
+      expect.objectContaining({ name: toAiLabelName("bug") }),
     );
     expect(ctx.octokit.issues.addLabels).toHaveBeenCalledWith(
       expect.objectContaining({ labels: [toAiLabelName("feature")] }),
