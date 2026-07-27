@@ -1,24 +1,29 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import type { LabelSuggestion } from "../domain/label-suggestion.js";
-import { toAiLabelName, stripAiLabelName } from "../labels/ai-label-name.js";
+import {
+  isAiLabelName,
+  toAiLabelName,
+  stripAiLabelName,
+} from "../labels/ai-label-name.js";
 
 // Bloc HTML invisible qui stocke l'analyse LLM de façon machine-readable,
 // pour que les handlers (clic bouton, case cochée) puissent agir sans
 // rappeler le LLM. Encodé en base64 pour rester robuste à tout texte.
 //
-// Depuis la version 2, ce bloc porte aussi le `headSha` analysé : une action
-// de Check Run doit refuser d'appliquer/retirer un label si la PR a reçu un
-// nouveau push depuis, pour ne jamais agir sur une analyse périmée.
+// Le bloc porte le `headSha` analysé et sa version courante est signée.
 const DATA_PREFIX = "<!-- llm-pr-labeler:data ";
 const DATA_SUFFIX = " -->";
-const DATA_REGEX = /<!-- llm-pr-labeler:data ([A-Za-z0-9+/=]+) -->/;
+const DATA_REGEX =
+  /<!-- llm-pr-labeler:data ([A-Za-z0-9+/=]+)(?:\.([a-f0-9]{64}))? -->/;
 
 export type StoredAnalysisState = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   // null seulement pour un ancien commentaire (version 1) qui ne portait pas
   // le SHA analysé : son état est alors considéré comme non vérifiable.
   headSha: string | null;
   analysis: PullRequestAnalysis;
+  verified: boolean;
 };
 
 type StoredAnalysisStateV2 = {
@@ -26,6 +31,34 @@ type StoredAnalysisStateV2 = {
   headSha: string;
   analysis: PullRequestAnalysis;
 };
+
+type StoredAnalysisStateV3 = {
+  version: 3;
+  headSha: string;
+  analysis: PullRequestAnalysis;
+};
+
+function stateSecret(explicitSecret?: string): string | undefined {
+  return [
+    explicitSecret,
+    process.env.COMMENT_STATE_SECRET,
+    process.env.WEBHOOK_SECRET,
+  ].find((candidate) => typeof candidate === "string" && candidate.length > 0);
+}
+
+function sign(encoded: string, secret: string): string {
+  return createHmac("sha256", secret).update(encoded).digest("hex");
+}
+
+function validSignature(
+  encoded: string,
+  signature: string,
+  secret: string,
+): boolean {
+  const expected = Buffer.from(sign(encoded, secret), "hex");
+  const actual = Buffer.from(signature, "hex");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
 
 function isPullRequestAnalysis(value: unknown): value is PullRequestAnalysis {
   return (
@@ -38,20 +71,45 @@ function isPullRequestAnalysis(value: unknown): value is PullRequestAnalysis {
 export function renderAnalysisDataBlock(
   analysis: PullRequestAnalysis,
   headSha: string,
+  explicitSecret?: string,
 ): string {
-  const state: StoredAnalysisStateV2 = { version: 2, headSha, analysis };
+  const secret = stateSecret(explicitSecret);
+  const state: StoredAnalysisStateV2 | StoredAnalysisStateV3 = secret
+    ? { version: 3, headSha, analysis }
+    : { version: 2, headSha, analysis };
   const json = JSON.stringify(state);
   const encoded = Buffer.from(json, "utf8").toString("base64");
-  return `${DATA_PREFIX}${encoded}${DATA_SUFFIX}`;
+  const signature = secret ? `.${sign(encoded, secret)}` : "";
+  return `${DATA_PREFIX}${encoded}${signature}${DATA_SUFFIX}`;
 }
 
-export function parseAnalysisDataBlock(body: string): StoredAnalysisState | null {
+export function parseAnalysisDataBlock(
+  body: string,
+  explicitSecret?: string,
+): StoredAnalysisState | null {
   const match = body.match(DATA_REGEX);
   if (!match) return null;
 
   try {
     const json = Buffer.from(match[1], "base64").toString("utf8");
     const parsed = JSON.parse(json) as Record<string, unknown>;
+    const secret = stateSecret(explicitSecret);
+
+    if (
+      parsed.version === 3 &&
+      typeof parsed.headSha === "string" &&
+      isPullRequestAnalysis(parsed.analysis)
+    ) {
+      if (!secret || !match[2] || !validSignature(match[1], match[2], secret)) {
+        return null;
+      }
+      return {
+        version: 3,
+        headSha: parsed.headSha,
+        analysis: parsed.analysis,
+        verified: true,
+      };
+    }
 
     // Format v2 : { version: 2, headSha, analysis }.
     if (
@@ -63,6 +121,7 @@ export function parseAnalysisDataBlock(body: string): StoredAnalysisState | null
         version: 2,
         headSha: parsed.headSha,
         analysis: parsed.analysis,
+        verified: false,
       };
     }
 
@@ -70,7 +129,12 @@ export function parseAnalysisDataBlock(body: string): StoredAnalysisState | null
     // sans version ni headSha. On le parse sans planter, mais il est traité
     // comme non vérifiable (headSha: null) par les handlers.
     if (isPullRequestAnalysis(parsed)) {
-      return { version: 1, headSha: null, analysis: parsed };
+      return {
+        version: 1,
+        headSha: null,
+        analysis: parsed,
+        verified: false,
+      };
     }
 
     return null;
@@ -105,7 +169,8 @@ export function parseCheckedLabels(body: string): string[] {
   const checked: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = regex.exec(body)) !== null) {
-    if (match[1].toLowerCase() === "x") checked.push(stripAiLabelName(match[2]));
+    if (match[1].toLowerCase() === "x")
+      checked.push(stripAiLabelName(match[2]));
   }
   return checked;
 }
@@ -119,4 +184,15 @@ export function parseAllCheckboxLabels(body: string): string[] {
     labels.push(stripAiLabelName(match[1]));
   }
   return labels;
+}
+
+export function hasOnlyAiCheckboxLabels(body: string): boolean {
+  const regex = /^- \[[ xX]\] `([^`]+)`/gm;
+  let count = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(body)) !== null) {
+    count += 1;
+    if (!isAiLabelName(match[1])) return false;
+  }
+  return count > 0;
 }

@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { buildPullRequestLlmContext } from "../src/llm/pr-context.js";
+import {
+  allocatePatchTokenBudgets,
+  buildPullRequestLlmContext,
+} from "../src/llm/pr-context.js";
 import type {
   PullRequestData,
   PullRequestFileData,
 } from "../src/domain/pull-request-data.js";
 import {
   MAX_FILES_FOR_LLM,
+  LLM_RESPONSE_TOKEN_RESERVE,
+  MAX_LLM_CONTEXT_TOKENS,
   MAX_REPOSITORY_LABELS_FOR_LLM,
   MAX_TOTAL_PATCH_CHARS,
   MAX_TOTAL_PATCH_TOKENS,
@@ -216,6 +221,22 @@ describe("buildPullRequestLlmContext", () => {
     expect(estimatedTokens).toBeLessThanOrEqual(MAX_TOTAL_PATCH_TOKENS);
   });
 
+  it("respecte la limite du prompt complet avec la réserve de réponse", () => {
+    const files: PullRequestFileData[] = Array.from({ length: 6 }, (_, i) => ({
+      filename: `src/file${i}.ts`,
+      status: "modified",
+      additions: 100,
+      deletions: 0,
+      changes: 100,
+      patch: `+${"x".repeat(20_000)}`,
+    }));
+
+    const ctx = buildPullRequestLlmContext(baseData(files));
+    expect(
+      ctx.promptBudget.finalPromptEstimatedTokens + LLM_RESPONSE_TOKEN_RESERVE,
+    ).toBeLessThanOrEqual(MAX_LLM_CONTEXT_TOKENS);
+  });
+
   it("réduit le budget des patchs quand les métadonnées de la PR sont très volumineuses", () => {
     const files: PullRequestFileData[] = Array.from({ length: 6 }, (_, i) => ({
       filename: `src/file${i}.ts`,
@@ -313,5 +334,25 @@ describe("buildPullRequestLlmContext", () => {
 
     expect(ctx.repositoryLabels).toHaveLength(MAX_REPOSITORY_LABELS_FOR_LLM);
     expect(ctx.repositoryLabels).toContain("kind/bug");
+  });
+
+  it("ramène un budget négatif à zéro", () => {
+    expect(allocatePatchTokenBudgets([100, 200], -50)).toEqual([0, 0]);
+  });
+
+  it("redistribue le reliquat laissé par les petits fichiers", () => {
+    expect(
+      allocatePatchTokenBudgets([1_500, 20, 20, 20, 20, 20], 2_500, 1_500),
+    ).toEqual([1_500, 20, 20, 20, 20, 20]);
+  });
+
+  it("conserve exactement le budget quand la demande totale est suffisante", () => {
+    const allocations = allocatePatchTokenBudgets(
+      [1_500, 1_000, 20, 20, 20, 20],
+      2_500,
+      1_500,
+    );
+    expect(allocations).toEqual([1_500, 920, 20, 20, 20, 20]);
+    expect(allocations.reduce((sum, value) => sum + value, 0)).toBe(2_500);
   });
 });

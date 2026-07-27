@@ -1,23 +1,24 @@
 export const BOT_COMMENT_MARKER = "<!-- llm-pr-labeler -->";
 export const MAX_FILES_IN_COMMENT = 20;
 
-// Nombre maximum de fichiers (les mieux scorés) dont le diff est envoyé au LLM.
-// Valeur conservative pour respecter la limite TPM du tier gratuit Groq (6 000 tokens/min).
+// Nombre maximum de fichiers dont le diff est envoyé au LLM.
 export const MAX_FILES_FOR_LLM = 6;
 
 // Nombre maximum de lignes conservées par patch avant troncature.
 export const MAX_PATCH_LINES_PER_FILE = 60;
 
-// Budget estimé des patches. Trois caractères par token est une approximation
-// plus prudente que quatre pour du code source (tokens souvent courts : `{`, `=>`...).
-export const ESTIMATED_CHARS_PER_TOKEN = 3;
+const configuredCharsPerToken = Number.parseFloat(
+  process.env.ESTIMATED_CHARS_PER_TOKEN ?? "3",
+);
+export const ESTIMATED_CHARS_PER_TOKEN =
+  Number.isFinite(configuredCharsPerToken) && configuredCharsPerToken > 0
+    ? configuredCharsPerToken
+    : 3;
 export const MAX_PATCH_TOKENS_PER_FILE = 750;
 export const MAX_TOTAL_PATCH_TOKENS = 2_500;
 
-// Budget global du prompt envoyé au LLM (system + user), toutes sections
-// confondues, réserve pour la réponse comprise. Le budget réel des patches
-// (voir pr-context.ts) est dérivé de cette limite moins tout ce qui n'est pas
-// un patch (métadonnées, description, labels, résumés de fichiers...).
+// Ce budget limite une requête. Les limites TPM, la concurrence et les retries
+// doivent être gérés séparément.
 export const MAX_LLM_CONTEXT_TOKENS = 6_000;
 export const LLM_RESPONSE_TOKEN_RESERVE = 1_000;
 

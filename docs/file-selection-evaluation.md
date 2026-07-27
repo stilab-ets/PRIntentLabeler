@@ -53,3 +53,29 @@ npm run evaluate:selection -- \
 Cette vérification mesure la qualité du contexte sélectionné, pas encore la
 précision finale du modèle. La précision des labels devra être mesurée sur un
 jeu annoté avec exact match, précision, rappel et F1.
+
+## Harness d'ablation annoté
+
+Le harness compare les variantes suivantes avec le même catalogue de labels,
+le même modèle, le même system prompt et les mêmes paramètres Groq :
+
+- A : titre seulement;
+- B : titre et résumé des rôles;
+- C : titre, rôles et diffs sélectionnés par le score;
+- D : titre, rôles et diffs admissibles choisis avec une seed fixe.
+
+Le fichier `evaluation/dataset.example.json` décrit le format d'entrée. Une
+évaluation réelle nécessite un fichier contenant des PR annotées et la variable
+`GROQ_API_KEY` :
+
+```bash
+npm run eval:selector -- evaluation/prs-annotees.json \
+  --output evaluation/resultats.json \
+  --seed 20260726
+```
+
+La sortie JSON contient les résultats par PR et par variante, les fichiers
+sélectionnés, les jetons estimés et les jetons réels lorsque Groq fournit
+`usage`. Elle calcule l'exact-set accuracy, la précision, le rappel, le F1 et le
+Jaccard. Si aucun dataset n'est fourni, la commande s'arrête en indiquant que les
+données annotées manquent; elle ne génère aucune annotation ni aucun résultat.

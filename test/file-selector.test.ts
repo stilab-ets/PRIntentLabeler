@@ -104,7 +104,7 @@ describe("shouldIgnoreFile / classifyFileRole", () => {
 
 describe("determineContentPolicy", () => {
   it("un manifeste de dépendances peut envoyer son patch", () => {
-    expect(determineContentPolicy("package.json", "dependency")).toBe(
+    expect(determineContentPolicy("package.json", "dependency", "+dep")).toBe(
       "include-patch",
     );
   });
@@ -119,24 +119,28 @@ describe("determineContentPolicy", () => {
   });
 
   it("un snapshot ne peut jamais envoyer son patch", () => {
-    expect(
-      determineContentPolicy("src/__snapshots__/a.snap", "test"),
-    ).toBe("summary-only");
-    expect(determineContentPolicy("feature.snap", "test")).toBe(
+    expect(determineContentPolicy("src/__snapshots__/a.snap", "test")).toBe(
       "summary-only",
     );
+    expect(determineContentPolicy("feature.snap", "test")).toBe("summary-only");
   });
 
   it("un fichier de test normal peut envoyer son patch", () => {
-    expect(determineContentPolicy("src/a.test.ts", "test")).toBe(
+    expect(determineContentPolicy("src/a.test.ts", "test", "+test")).toBe(
       "include-patch",
     );
   });
 
   it("un fichier généré ne peut jamais envoyer son patch", () => {
-    expect(
-      determineContentPolicy("src/generated/api.pb.go", "generated"),
-    ).toBe("summary-only");
+    expect(determineContentPolicy("src/generated/api.pb.go", "generated")).toBe(
+      "summary-only",
+    );
+  });
+
+  it("un fichier sans patch est summary-only", () => {
+    expect(determineContentPolicy("src/service.ts", "source")).toBe(
+      "summary-only",
+    );
   });
 });
 
@@ -147,37 +151,65 @@ describe("scoreFile / rankFilesByImportance", () => {
     expect(source).toBeGreaterThan(readme);
   });
 
-  it("n'accorde jamais le bonus sécurité sans confirmation de la PR (faux signal)", () => {
+  it("évite les faux signaux par sous-chaîne", () => {
     const author = rankFilesByImportance([file("src/author.ts")])[0];
     const feedback = rankFilesByImportance([file("src/feedback.ts")])[0];
     const inventory = rankFilesByImportance([file("src/inventory.ts")])[0];
     const cache = rankFilesByImportance([file("src/cacheManager.ts")])[0];
 
-    expect(author.reasons).not.toContain("security signal");
+    expect(author.reasons).not.toContain("security path signal");
     expect(feedback.role).toBe("source");
     expect(inventory.role).toBe("source");
-    expect(cache.reasons).not.toContain("performance signal");
+    expect(cache.reasons).toContain("performance path signal");
   });
 
-  it("accorde le bonus sécurité seulement si le chemin ET la PR en parlent", () => {
-    const withoutContext = rankFilesByImportance([
-      file("src/authService.ts"),
-    ])[0];
-    const withContext = rankFilesByImportance(
-      [file("src/authService.ts")],
-      { title: "fix jwt timeout in login" },
-    )[0];
+  it("donne +1 au signal sécurité du chemin et +3 au total quand le titre le confirme", () => {
+    const neutral = scoreFile(file("src/account/profile.ts"));
+    const pathOnly = scoreFile(file("src/security/profile.ts"));
+    const confirmed = scoreFile(file("src/security/profile.ts"), {
+      title: "harden security profile",
+    });
+    const neutralWithSameTitle = scoreFile(file("src/account/profile.ts"), {
+      title: "harden security profile",
+    });
 
-    expect(withoutContext.reasons).not.toContain("security signal");
-    expect(withContext.reasons).toContain("security signal");
+    expect(pathOnly).toBe(neutral + 1);
+    expect(confirmed).toBe(neutralWithSameTitle + 3);
   });
 
-  it("accorde le bonus performance seulement si le chemin ET la PR en parlent", () => {
-    const withContext = rankFilesByImportance(
-      [file("src/cacheManager.ts")],
-      { title: "improve cache performance" },
-    )[0];
-    expect(withContext.reasons).toContain("performance signal");
+  it("donne +1 au signal performance du chemin et +3 au total quand le titre le confirme", () => {
+    const neutral = scoreFile(file("src/manager/profile.ts"));
+    const pathOnly = scoreFile(file("src/cache/profile.ts"));
+    const confirmed = scoreFile(file("src/cache/profile.ts"), {
+      title: "improve cache profile",
+    });
+    const neutralWithSameTitle = scoreFile(file("src/manager/profile.ts"), {
+      title: "improve cache profile",
+    });
+
+    expect(pathOnly).toBe(neutral + 1);
+    expect(confirmed).toBe(neutralWithSameTitle + 3);
+  });
+
+  it("ne classe pas automatiquement les formats de schéma applicatif comme database", () => {
+    expect(classifyFileRole("src/models/userSchema.ts")).toBe("source");
+    expect(classifyFileRole("openapi/schema.yaml")).toBe("configuration");
+    expect(classifyFileRole("graphql/userSchema.graphql")).not.toBe("database");
+    expect(classifyFileRole("schemas/user.schema.json")).not.toBe("database");
+  });
+
+  it("classe les vrais changements de base de données comme database", () => {
+    expect(classifyFileRole("db/query.sql")).toBe("database");
+    expect(classifyFileRole("prisma/schema.prisma")).toBe("database");
+    expect(classifyFileRole("src/migrations/20260726_add_user.ts")).toBe(
+      "database",
+    );
+  });
+
+  it("reconnaît les configurations TypeScript usuelles", () => {
+    expect(classifyFileRole("vite.config.ts")).toBe("configuration");
+    expect(classifyFileRole("jest.config.ts")).toBe("configuration");
+    expect(classifyFileRole("tsconfig.json")).toBe("configuration");
   });
 
   it("donne un score pertinent à un workflow CI/CD", () => {
@@ -261,14 +293,14 @@ describe("scoreFile / rankFilesByImportance", () => {
     expect(withBoth).toBe(withTitleOnly);
   });
 
-  it("le statut modified ne donne aucun bonus, added et removed donnent +1", () => {
+  it("seul le statut added donne +1", () => {
     const modified = scoreFile(file("src/a.ts", { status: "modified" }));
     const added = scoreFile(file("src/a.ts", { status: "added" }));
     const removed = scoreFile(file("src/a.ts", { status: "removed" }));
     const renamed = scoreFile(file("src/a.ts", { status: "renamed" }));
 
     expect(added).toBe(modified + 1);
-    expect(removed).toBe(modified + 1);
+    expect(removed).toBe(modified);
     expect(renamed).toBe(modified);
   });
 
@@ -369,6 +401,11 @@ describe("scoreFile / rankFilesByImportance", () => {
     expect(selected.map((entry) => entry.file.filename)).toEqual([
       "src/with-diff.ts",
     ]);
+    const missing = ranked.find(
+      (entry) => entry.file.filename === "src/no-diff.ts",
+    );
+    expect(missing?.contentPolicy).toBe("summary-only");
+    expect(missing?.contentReason).toBe("diff unavailable");
   });
 
   it("une PR ne contenant qu'un package-lock.json reste reconnue comme un signal dependency", () => {
@@ -378,5 +415,21 @@ describe("scoreFile / rankFilesByImportance", () => {
     expect(ranked[0].role).toBe("dependency");
     const selected = selectRepresentativeFiles(ranked, 6);
     expect(selected).toHaveLength(0);
+  });
+
+  it("diversifie dix tests et deux sources de façon déterministe", () => {
+    const ranked = rankFilesByImportance([
+      ...Array.from({ length: 10 }, (_, index) =>
+        file(`test/case-${index}.test.ts`, { patch: `+test ${index}` }),
+      ),
+      file("src/service.ts", { patch: "+service" }),
+      file("src/controller.ts", { patch: "+controller" }),
+    ]);
+
+    const first = selectRepresentativeFiles(ranked, 6);
+    const second = selectRepresentativeFiles(ranked, 6);
+    expect(first).toEqual(second);
+    expect(first.filter((entry) => entry.role === "source")).toHaveLength(2);
+    expect(first.filter((entry) => entry.role === "test")).toHaveLength(4);
   });
 });

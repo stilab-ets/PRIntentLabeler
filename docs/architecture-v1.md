@@ -61,9 +61,15 @@ Le doc PFE recommande Python, mais nous avons choisi TypeScript avec Probot, le 
 
 Cela nous économise plusieurs semaines de plomberie d'intégration GitHub.
 
-### Pourquoi un commentaire et pas un GitHub Check Run
+### Commentaire et GitHub Check Run
 
-Pour le MVP, nous publions un commentaire de Pull Request plutôt qu'un GitHub Check Run. Plus simple à déboguer, plus visible dans la conversation de la PR, et meilleur pour les démonstrations. La migration vers Check Run est documentée comme évolution possible.
+Le commentaire contient le diagnostic détaillé, les fichiers représentatifs et
+les cases permettant de gérer les labels suggérés. Une Check Run complète ce
+commentaire avec les actions `Suggest only`, `Auto-apply high` et
+`Auto-apply all`. Les actions sont refusées lorsque le SHA analysé ne correspond
+plus au dernier commit de la PR. L'état invisible du commentaire est signé avec
+un HMAC dérivé de `COMMENT_STATE_SECRET` ou, par défaut, du
+`WEBHOOK_SECRET`; une modification du bloc stocké invalide l'action.
 
 ### Pourquoi un marker HTML invisible
 
@@ -83,7 +89,7 @@ Les fichiers de `src/domain/` définissent des types internes (`PullRequestData`
 |---|---|---|
 | 0 | Cadrage, squelette technique, docs | Semaines 1-2 |
 | 1 | Plomberie GitHub fonctionnelle, sans LLM | Semaines 3-5 |
-| 2 | Intégration LLM (Gemini), sortie JSON validée | Semaines 6-8 (rapport d'étape) |
+| 2 | Intégration LLM (Groq), sortie JSON validée | Semaines 6-8 (rapport d'étape) |
 | 3 | Évaluation rigoureuse sur 100+ PRs | Semaines 9-11 |
 | 4 | `/intent apply`, comparaison multi-modèles | Semaines 12-13 |
 | 5 | Finalisation, rapport, présentation | Semaines 14-15 |

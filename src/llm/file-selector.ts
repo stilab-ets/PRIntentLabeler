@@ -4,7 +4,10 @@ import type {
   PullRequestFileRole,
   RankedPullRequestFile,
 } from "../domain/pull-request-data.js";
-import { PR_BODY_MATCH_BONUS, PR_TITLE_MATCH_BONUS } from "../utils/constants.js";
+import {
+  PR_BODY_MATCH_BONUS,
+  PR_TITLE_MATCH_BONUS,
+} from "../utils/constants.js";
 
 // Un lockfile est un signal fort ("cette PR touche aux dépendances") mais son
 // contenu est généré mécaniquement : jamais utile en diff, souvent énorme.
@@ -180,10 +183,6 @@ const PR_STOP_WORDS = new Set([
   "par",
 ]);
 
-// Tokens de sécurité/performance : un simple mot dans un chemin ne suffit
-// plus à déclencher le bonus (voir hasConfirmedSignal), il faut aussi que
-// la PR (titre/description) en parle explicitement pour éviter les faux positifs
-// (ex. "author.ts" ne doit jamais être traité comme un signal de sécurité).
 const SECURITY_TOKENS = new Set([
   "auth",
   "authentication",
@@ -257,7 +256,10 @@ export function tokenizeText(text: string): Set<string> {
 
 // Conservé pour compatibilité (scripts / affichage) : tous les mots-clés
 // utiles du titre + de la description, fusionnés en une seule liste.
-export function extractPrKeywords(title: string = "", body: string = ""): string[] {
+export function extractPrKeywords(
+  title: string = "",
+  body: string = "",
+): string[] {
   return [...tokenizeText(`${title} ${body}`)];
 }
 
@@ -270,7 +272,10 @@ function pathSegments(filename: string): string[] {
   return filename.toLowerCase().split("/").filter(Boolean);
 }
 
-function isInDirectory(context: FilePathContext, directories: string[]): boolean {
+function isInDirectory(
+  context: FilePathContext,
+  directories: string[],
+): boolean {
   return directories.some((directory) => context.segments.includes(directory));
 }
 
@@ -304,7 +309,9 @@ function intersects(a: Set<string>, b: Iterable<string>): boolean {
 }
 
 function isSnapshotFile(context: FilePathContext): boolean {
-  return context.segments.includes("__snapshots__") || context.path.endsWith(".snap");
+  return (
+    context.segments.includes("__snapshots__") || context.path.endsWith(".snap")
+  );
 }
 
 function isLockfile(context: FilePathContext): boolean {
@@ -379,16 +386,9 @@ const ROLE_RULES: RoleRule[] = [
   {
     role: "database",
     matches: (context) =>
-      isInDirectory(context, [
-        "database",
-        "db",
-        "migration",
-        "migrations",
-        "schema",
-        "schemas",
-      ]) ||
+      isInDirectory(context, ["database", "db", "migration", "migrations"]) ||
       [".sql", ".prisma"].includes(context.extension) ||
-      intersects(context.tokens, ["database", "migration", "prisma", "schema"]),
+      intersects(context.tokens, ["database", "migration", "prisma"]),
   },
   {
     role: "configuration",
@@ -398,7 +398,11 @@ const ROLE_RULES: RoleRule[] = [
       ) ||
       base.startsWith("config.") ||
       base.startsWith("settings.") ||
+      base.includes(".config.") ||
       base.startsWith(".env") ||
+      base === "tsconfig.json" ||
+      base.startsWith("tsconfig.") ||
+      base === "jsconfig.json" ||
       [".yml", ".yaml", ".toml", ".ini"].includes(extension),
   },
   {
@@ -433,7 +437,11 @@ export function classifyFileRole(filename: string): PullRequestFileRole {
   // reste "generated" même s'il porte l'extension .ts.
   if (isGeneratedLooking(context)) return "generated";
   if (isLockfile(context)) return "dependency";
-  if (DEPENDENCY_MANIFESTS.has(context.base) || context.base.startsWith("requirements-") || context.base.startsWith("requirements.")) {
+  if (
+    DEPENDENCY_MANIFESTS.has(context.base) ||
+    context.base.startsWith("requirements-") ||
+    context.base.startsWith("requirements.")
+  ) {
     return "dependency";
   }
 
@@ -443,17 +451,45 @@ export function classifyFileRole(filename: string): PullRequestFileRole {
 // Sépare le rôle sémantique du droit d'envoyer le patch complet au LLM :
 // un lockfile ou un snapshot reste un signal utile (visible dans le résumé),
 // mais son contenu volumineux/généré ne doit jamais consommer le budget de patch.
+function determineContentDecision(
+  filename: string,
+  role: PullRequestFileRole,
+  patch: string | undefined,
+): { policy: FileContentPolicy; reason?: string } {
+  const context = buildFilePathContext(filename);
+
+  if (role === "generated") {
+    const generatedSource =
+      isInDirectory(context, ["generated", "gen", "__generated__"]) ||
+      context.base.includes(".generated.") ||
+      context.base.endsWith(".pb.go") ||
+      context.base.endsWith(".g.cs");
+    return {
+      policy: "summary-only",
+      reason: generatedSource
+        ? "generated source, diff omitted"
+        : "generated or binary, diff omitted",
+    };
+  }
+  if (role === "dependency" && isLockfile(context)) {
+    return { policy: "summary-only", reason: "lockfile, diff omitted" };
+  }
+  if (role === "test" && isSnapshotFile(context)) {
+    return { policy: "summary-only", reason: "snapshot, diff omitted" };
+  }
+  if (typeof patch !== "string" || patch.trim().length === 0) {
+    return { policy: "summary-only", reason: "diff unavailable" };
+  }
+
+  return { policy: "include-patch" };
+}
+
 export function determineContentPolicy(
   filename: string,
   role: PullRequestFileRole,
+  patch?: string,
 ): FileContentPolicy {
-  const context = buildFilePathContext(filename);
-
-  if (role === "generated") return "summary-only";
-  if (role === "dependency" && isLockfile(context)) return "summary-only";
-  if (role === "test" && isSnapshotFile(context)) return "summary-only";
-
-  return "include-patch";
+  return determineContentDecision(filename, role, patch).policy;
 }
 
 type Evaluation = {
@@ -461,12 +497,12 @@ type Evaluation = {
   reasons: string[];
   role: PullRequestFileRole;
   contentPolicy: FileContentPolicy;
+  contentReason?: string;
 };
 
 type PrKeywordContext = {
   titleKeywords: Set<string>;
   bodyKeywords: Set<string>;
-  prTokens: Set<string>;
 };
 
 function buildPrKeywordContext(context: FileScoreContext): PrKeywordContext {
@@ -475,7 +511,6 @@ function buildPrKeywordContext(context: FileScoreContext): PrKeywordContext {
   return {
     titleKeywords,
     bodyKeywords,
-    prTokens: new Set([...titleKeywords, ...bodyKeywords]),
   };
 }
 
@@ -485,7 +520,13 @@ function evaluateFile(
 ): Evaluation {
   const context = buildFilePathContext(file.filename);
   const role = classifyFileRole(file.filename);
-  const contentPolicy = determineContentPolicy(file.filename, role);
+  const contentDecision = determineContentDecision(
+    file.filename,
+    role,
+    file.patch,
+  );
+  const contentPolicy = contentDecision.policy;
+  const contentReason = contentDecision.reason;
 
   if (role === "generated") {
     return {
@@ -493,6 +534,7 @@ function evaluateFile(
       reasons: ["generated or binary file (summary only)"],
       role,
       contentPolicy,
+      contentReason,
     };
   }
 
@@ -518,24 +560,41 @@ function evaluateFile(
     add(PR_BODY_MATCH_BONUS, "matches PR description");
   }
 
-  // Sécurité/performance exigent une confirmation croisée chemin + PR : un
-  // fichier nommé "author.ts" ou "cache-utils.ts" ne suffit pas seul, il faut
-  // que la PR elle-même parle explicitement de sécurité ou de performance.
   const hasSecurityPathSignal = intersects(context.tokens, SECURITY_TOKENS);
-  const hasSecurityPrSignal = intersects(prKeywords.prTokens, SECURITY_TOKENS);
-  if (hasSecurityPathSignal && hasSecurityPrSignal) {
-    add(2, "security signal");
+  const hasSecurityTitleSignal = intersects(
+    prKeywords.titleKeywords,
+    SECURITY_TOKENS,
+  );
+  if (hasSecurityPathSignal) {
+    add(
+      hasSecurityTitleSignal ? 3 : 1,
+      hasSecurityTitleSignal
+        ? "security signal confirmed by title"
+        : "security path signal",
+    );
   }
 
-  const hasPerformancePathSignal = intersects(context.tokens, PERFORMANCE_TOKENS);
-  const hasPerformancePrSignal = intersects(prKeywords.prTokens, PERFORMANCE_TOKENS);
-  if (hasPerformancePathSignal && hasPerformancePrSignal) {
-    add(2, "performance signal");
+  const hasPerformancePathSignal = intersects(
+    context.tokens,
+    PERFORMANCE_TOKENS,
+  );
+  const hasPerformanceTitleSignal = intersects(
+    prKeywords.titleKeywords,
+    PERFORMANCE_TOKENS,
+  );
+  if (hasPerformancePathSignal) {
+    add(
+      hasPerformanceTitleSignal ? 3 : 1,
+      hasPerformanceTitleSignal
+        ? "performance signal confirmed by title"
+        : "performance path signal",
+    );
   }
 
   if (
     role === "source" &&
-    (intersects(context.tokens, PUBLIC_BEHAVIOR_TOKENS) || context.segments.includes("api"))
+    (intersects(context.tokens, PUBLIC_BEHAVIOR_TOKENS) ||
+      context.segments.includes("api"))
   ) {
     add(1, "public behavior signal");
   }
@@ -544,11 +603,8 @@ function evaluateFile(
     case "added":
       add(1, "new file");
       break;
-    case "removed":
-      add(1, "removed file");
-      break;
-    // Un fichier modifié ou renommé n'apporte pas de signal d'intention en soi.
     case "modified":
+    case "removed":
     case "renamed":
     default:
       break;
@@ -569,7 +625,7 @@ function evaluateFile(
     add(-2, "fixture support file");
   }
 
-  return { score, reasons, role, contentPolicy };
+  return { score, reasons, role, contentPolicy, contentReason };
 }
 
 export function scoreFile(
@@ -597,12 +653,13 @@ export function rankFilesByImportance(
         a.file.filename.localeCompare(b.file.filename) ||
         a.originalIndex - b.originalIndex,
     )
-    .map(({ file, score, reasons, role, contentPolicy }) => ({
+    .map(({ file, score, reasons, role, contentPolicy, contentReason }) => ({
       file,
       score,
       reasons,
       role,
       contentPolicy,
+      contentReason,
     }));
 }
 

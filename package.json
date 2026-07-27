@@ -12,8 +12,10 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "evaluate:selection": "node --import tsx scripts/evaluate-file-selection.ts",
-    "lint": "eslint src test --ext .ts",
-    "format": "prettier --write \"{src,test}/**/*.ts\""
+    "eval:selector": "node --import tsx scripts/eval-selector.ts",
+    "lint": "eslint src test scripts --ext .ts",
+    "format": "prettier --write \"{src,test,scripts}/**/*.ts\"",
+    "format:check": "prettier --check \"{src,test,scripts}/**/*.ts\""
   },
   "dependencies": {
     "groq-sdk": "^1.2.1",

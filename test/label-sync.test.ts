@@ -14,14 +14,14 @@ describe("computeLabelChanges", () => {
     expect(toRemove).toEqual([]);
   });
 
-  it("retire les labels suggérés décochés mais présents sur la PR", () => {
+  it("ne retire jamais les labels manuels suggérés mais décochés", () => {
     const { toAdd, toRemove } = computeLabelChanges(
       suggested,
       ["bug"],
       ["bug", "tests"],
     );
-    expect(toAdd).toEqual([]);
-    expect(toRemove).toEqual(["tests"]);
+    expect(toAdd).toEqual(["bug"]);
+    expect(toRemove).toEqual([]);
   });
 
   it("ne touche pas aux labels hors périmètre suggéré", () => {
@@ -30,7 +30,7 @@ describe("computeLabelChanges", () => {
       ["bug"],
       ["bug", "wontfix"],
     );
-    expect(toAdd).toEqual([]);
+    expect(toAdd).toEqual(["bug"]);
     expect(toRemove).toEqual([]);
   });
 
@@ -41,7 +41,7 @@ describe("computeLabelChanges", () => {
       ["bug"],
     );
     expect(toAdd).toEqual(["feature"]);
-    expect(toRemove).toEqual(["bug"]);
+    expect(toRemove).toEqual([]);
   });
 
   it("reconnaît un label présent sous sa forme préfixée 🤖 et retourne le nom exact à retirer", () => {

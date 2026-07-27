@@ -41,10 +41,15 @@ export async function handleCheckRunRequestedAction(
 
   try {
     // On récupère l'analyse stockée dans le commentaire (pas de rappel LLM).
-    const existing = await findBotComment(context.octokit, owner, repo, pr.number);
+    const existing = await findBotComment(
+      context.octokit,
+      owner,
+      repo,
+      pr.number,
+    );
     const stored = existing ? parseAnalysisDataBlock(existing.body) : null;
 
-    if (!stored || stored.analysis.suggestions.length === 0) {
+    if (!stored?.verified || stored.analysis.suggestions.length === 0) {
       context.log.warn(logContext, "No stored suggestions to act on");
       return;
     }
@@ -137,7 +142,12 @@ export async function handleCheckRunRequestedAction(
       return;
     }
 
-    const body = buildAnalysisComment(prData, llmContext, analysis, appliedLabels);
+    const body = buildAnalysisComment(
+      prData,
+      llmContext,
+      analysis,
+      appliedLabels,
+    );
     await upsertComment(context.octokit, owner, repo, pr.number, body);
 
     context.log.info(
