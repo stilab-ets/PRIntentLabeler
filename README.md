@@ -48,6 +48,7 @@ Pour inspecter la sélection sans consommer de jetons LLM :
 
 ```bash
 npm run evaluate:selection -- https://github.com/owner/repo/pull/123
+npm run eval:selector -- evaluation/prs-annotees.json --output evaluation/resultats.json
 ```
 
 L'échantillon public utilisé pour calibrer cette version est documenté dans
@@ -79,6 +80,7 @@ Au premier lancement, Probot ouvre une page web qui te guide pour créer la GitH
 | `npm test`                            | Lance les tests Vitest                |
 | `npm run test:coverage`               | Tests avec rapport de couverture      |
 | `npm run evaluate:selection -- <URL>` | Inspecte le score sur une PR publique |
+| `npm run eval:selector -- <dataset>` | Compare les quatre variantes d'ablation |
 | `npm run lint`                        | Vérifie le code avec ESLint           |
 | `npm run format`                      | Formate le code avec Prettier         |
 

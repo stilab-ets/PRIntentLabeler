@@ -14,6 +14,7 @@ const baseData: PullRequestData = {
   author: "mehdi",
   baseBranch: "main",
   headBranch: "fix-login",
+  headSha: "abc123",
   htmlUrl: "https://github.com/org/test-repo/pull/42",
   additions: 25,
   deletions: 5,
@@ -25,6 +26,7 @@ const baseData: PullRequestData = {
       additions: 20,
       deletions: 5,
       changes: 25,
+      patch: "@@ -1,5 +1,5 @@\n-old\n+new",
     },
     {
       filename: "test/auth/login.test.ts",
@@ -32,6 +34,7 @@ const baseData: PullRequestData = {
       additions: 5,
       deletions: 0,
       changes: 5,
+      patch: "@@ -0,0 +1,5 @@\n+test",
     },
   ],
   repositoryLabels: ["bug", "feature", "tests"],
@@ -74,18 +77,24 @@ describe("buildAnalysisComment", () => {
     expect(result).toContain("Aucun label trouvé");
   });
 
-  it("affiche le nombre de fichiers analysés et ignorés", () => {
+  it("affiche le nombre de fichiers analysés et résumés seulement", () => {
     const result = buildAnalysisComment(baseData, contextFor(baseData));
     expect(result).toContain("Fichiers analysés par le LLM");
-    expect(result).toContain("Fichiers ignorés");
+    expect(result).toContain("Fichiers résumés seulement");
   });
 
   it("affiche les labels suggérés sous forme de cases à cocher et le résumé quand l'analyse est fournie", () => {
     const analysis: PullRequestAnalysis = {
-      suggestions: [{ name: "bug", confidence: 0.9, reason: "corrige un crash" }],
+      suggestions: [
+        { name: "bug", confidence: 0.9, reason: "corrige un crash" },
+      ],
       summary: "Correction d'un bug d'authentification.",
     };
-    const result = buildAnalysisComment(baseData, contextFor(baseData), analysis);
+    const result = buildAnalysisComment(
+      baseData,
+      contextFor(baseData),
+      analysis,
+    );
     expect(result).toContain("Labels suggérés — coche ceux à appliquer");
     expect(result).toContain("- [ ] `🤖 bug`");
     expect(result).toContain("90%");
@@ -94,10 +103,17 @@ describe("buildAnalysisComment", () => {
 
   it("affiche les cases à cocher même quand aucun label n'est encore appliqué", () => {
     const analysis: PullRequestAnalysis = {
-      suggestions: [{ name: "bug", confidence: 0.9, reason: "corrige un crash" }],
+      suggestions: [
+        { name: "bug", confidence: 0.9, reason: "corrige un crash" },
+      ],
       summary: "",
     };
-    const result = buildAnalysisComment(baseData, contextFor(baseData), analysis, []);
+    const result = buildAnalysisComment(
+      baseData,
+      contextFor(baseData),
+      analysis,
+      [],
+    );
     expect(result).toContain("- [ ] `🤖 bug`");
     expect(result).toContain("Aucun label appliqué pour l'instant.");
   });
@@ -106,7 +122,11 @@ describe("buildAnalysisComment", () => {
     const analysis: PullRequestAnalysis = {
       suggestions: [
         { name: "bug", confidence: 0.9, reason: "corrige un crash" },
-        { name: "feature", confidence: 0.6, reason: "ajoute une fonctionnalité" },
+        {
+          name: "feature",
+          confidence: 0.6,
+          reason: "ajoute une fonctionnalité",
+        },
       ],
       summary: "",
     };

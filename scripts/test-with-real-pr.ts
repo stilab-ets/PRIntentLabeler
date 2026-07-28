@@ -24,7 +24,8 @@ import type {
 const args = process.argv.slice(2);
 const prUrl = args[0];
 const tokenIndex = args.indexOf("--token");
-const githubToken = tokenIndex !== -1 ? args[tokenIndex + 1] : process.env.GITHUB_TOKEN;
+const githubToken =
+  tokenIndex !== -1 ? args[tokenIndex + 1] : process.env.GITHUB_TOKEN;
 
 if (!prUrl || !prUrl.startsWith("https://github.com/")) {
   console.error(
@@ -39,7 +40,12 @@ if (!match) {
   process.exit(1);
 }
 
-const [, owner, repo, pullNumberStr] = match as [string, string, string, string];
+const [, owner, repo, pullNumberStr] = match as [
+  string,
+  string,
+  string,
+  string,
+];
 const pullNumber = parseInt(pullNumberStr, 10);
 
 // ---------------------------------------------------------------------------
@@ -63,7 +69,9 @@ async function ghFetch<T>(path: string): Promise<T> {
     const remaining = res.headers.get("x-ratelimit-remaining");
     if (remaining === "0") {
       const reset = res.headers.get("x-ratelimit-reset");
-      const resetDate = reset ? new Date(parseInt(reset) * 1000).toLocaleTimeString() : "?";
+      const resetDate = reset
+        ? new Date(parseInt(reset) * 1000).toLocaleTimeString()
+        : "?";
       throw new Error(
         `Rate limit GitHub atteint. Réessayez après ${resetDate} ou passez --token <GH_TOKEN>.`,
       );
@@ -91,7 +99,7 @@ async function fetchPrData(
       body: string | null;
       user: { login: string } | null;
       base: { ref: string };
-      head: { ref: string };
+      head: { ref: string; sha: string };
       html_url: string;
       additions: number;
       deletions: number;
@@ -109,9 +117,7 @@ async function fetchPrData(
       }[]
     >(`/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100`),
 
-    ghFetch<{ name: string }[]>(
-      `/repos/${owner}/${repo}/labels?per_page=100`,
-    ),
+    ghFetch<{ name: string }[]>(`/repos/${owner}/${repo}/labels?per_page=100`),
     ghFetch<{ name: string }[]>(
       `/repos/${owner}/${repo}/issues/${pullNumber}/labels?per_page=100`,
     ),
@@ -135,6 +141,7 @@ async function fetchPrData(
     author: pr.user?.login ?? "unknown",
     baseBranch: pr.base.ref,
     headBranch: pr.head.ref,
+    headSha: pr.head.sha,
     htmlUrl: pr.html_url,
     additions: pr.additions,
     deletions: pr.deletions,
@@ -160,42 +167,66 @@ const prData = await fetchPrData(owner, repo, pullNumber);
 console.log(`\n📋 PR : ${prData.title}`);
 console.log(`   Auteur  : ${prData.author}`);
 console.log(`   Branche : ${prData.headBranch} → ${prData.baseBranch}`);
-console.log(`   Fichiers: ${prData.changedFilesCount} modifiés (+${prData.additions}/-${prData.deletions})`);
-console.log(`   Labels repo : ${prData.repositoryLabels.join(", ") || "(aucun)"}\n`);
+console.log(
+  `   Fichiers: ${prData.changedFilesCount} modifiés (+${prData.additions}/-${prData.deletions})`,
+);
+console.log(
+  `   Labels repo : ${prData.repositoryLabels.join(", ") || "(aucun)"}\n`,
+);
 
 const llmContext = buildPullRequestLlmContext(prData);
 
 console.log(`🔍 Contexte filtré :`);
-console.log(`   Fichiers sélectionnés : ${llmContext.selectedFilesCount}`);
-console.log(`   Fichiers ignorés      : ${llmContext.ignoredFilesCount}`);
+console.log(`   Fichiers sélectionnés  : ${llmContext.selectedFilesCount}`);
+console.log(
+  `   Fichiers résumés seulement : ${llmContext.summaryOnlyFilesCount}`,
+);
 console.log(`   Résumé (${llmContext.allFilesSummary.length} fichiers) :\n`);
 
 for (const f of llmContext.allFilesSummary.slice(0, 10)) {
-  const tag = f.ignored ? " [ignoré]" : ` [score ${f.score}]`;
-  console.log(`   ${f.ignored ? "✗" : "✓"} ${f.filename}${tag}`);
+  const tag =
+    f.contentPolicy === "summary-only"
+      ? " [résumé seulement]"
+      : ` [score ${f.score} pts]`;
+  console.log(
+    `   ${f.contentPolicy === "summary-only" ? "✗" : "✓"} ${f.filename}${tag}`,
+  );
 }
 if (llmContext.allFilesSummary.length > 10) {
-  console.log(`   ... et ${llmContext.allFilesSummary.length - 10} autre(s) fichier(s)`);
+  console.log(
+    `   ... et ${llmContext.allFilesSummary.length - 10} autre(s) fichier(s)`,
+  );
 }
 
-console.log(`\n🤖 Appel Groq en cours (${process.env.GROQ_MODEL ?? "llama-3.1-8b-instant"})...`);
+console.log(
+  `\n🤖 Appel Groq en cours (${process.env.GROQ_MODEL ?? "llama-3.1-8b-instant"})...`,
+);
 
 const provider = new GroqProvider(groqApiKey, process.env.GROQ_MODEL);
 const raw = await provider.classifyPullRequest(llmContext);
-const filtered = filterValidSuggestions(raw.suggestions, prData.repositoryLabels);
+const filtered = filterValidSuggestions(
+  raw.suggestions,
+  prData.repositoryLabels,
+);
 
 console.log(`\n🏷️  Suggestions :`);
 if (filtered.length === 0) {
-  console.log("   (aucune suggestion avec confiance ≥ 70% parmi les labels du repo)");
+  console.log(
+    "   (aucune suggestion avec confiance ≥ 70% parmi les labels du repo)",
+  );
   if (raw.suggestions.length > 0) {
     console.log("\n   Suggestions brutes (non filtrées) :");
     for (const s of raw.suggestions) {
-      console.log(`   - ${s.name} (${Math.round(s.confidence * 100)}%) : ${s.reason}`);
+      console.log(
+        `   - ${s.name} (${Math.round(s.confidence * 100)}%) : ${s.reason}`,
+      );
     }
   }
 } else {
   for (const s of filtered) {
-    console.log(`   - ${s.name} (${Math.round(s.confidence * 100)}%) : ${s.reason}`);
+    console.log(
+      `   - ${s.name} (${Math.round(s.confidence * 100)}%) : ${s.reason}`,
+    );
   }
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleIssueCommentEdited } from "../src/handlers/comment-handler.js";
 import { BOT_COMMENT_MARKER } from "../src/utils/constants.js";
 import { toAiLabelName } from "../src/labels/ai-label-name.js";
+import { renderAnalysisDataBlock } from "../src/comments/comment-state.js";
 
 function buildCommentBody(checked: string[], all: string[]): string {
   const lines = all
@@ -10,13 +11,28 @@ function buildCommentBody(checked: string[], all: string[]): string {
         `- [${checked.includes(name) ? "x" : " "}] \`${toAiLabelName(name)}\` — 90% — raison`,
     )
     .join("\n");
-  return `${BOT_COMMENT_MARKER}\n${lines}`;
+  const analysis = {
+    suggestions: all.map((name) => ({
+      name,
+      confidence: 0.9,
+      reason: "raison",
+    })),
+    summary: "résumé",
+  };
+  return `${BOT_COMMENT_MARKER}\n${lines}\n${renderAnalysisDataBlock(analysis, "head-123")}`;
 }
 
 function createMockContext(body: string, currentLabels: string[]) {
+  const comment = {
+    id: 44,
+    body,
+    user: { type: "Bot" },
+    performed_via_github_app: { id: 77 },
+  };
+
   return {
     payload: {
-      comment: { body },
+      comment,
       issue: {
         number: 3,
         pull_request: {},
@@ -27,10 +43,17 @@ function createMockContext(body: string, currentLabels: string[]) {
     },
     octokit: {
       issues: {
+        listComments: vi.fn().mockResolvedValue({ data: [comment] }),
+        listLabelsForRepo: vi.fn().mockResolvedValue({
+          data: ["bug", "feature"].map((name) => ({ name })),
+        }),
         addLabels: vi.fn().mockResolvedValue({}),
         removeLabel: vi.fn().mockResolvedValue({}),
         createLabel: vi.fn().mockResolvedValue({}),
         getLabel: vi.fn().mockResolvedValue({ data: { color: "d73a4a" } }),
+      },
+      pulls: {
+        get: vi.fn().mockResolvedValue({ data: { head: { sha: "head-123" } } }),
       },
     },
     log: {
@@ -42,14 +65,18 @@ function createMockContext(body: string, currentLabels: string[]) {
   };
 }
 
-describe("handleIssueCommentEdited — labels préfixés par l'icône IA", () => {
+describe("handleIssueCommentEdited", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.APP_ID = "77";
+    process.env.COMMENT_STATE_SECRET = "test-secret";
   });
 
-  it("applique le label sous sa forme préfixée 🤖 quand une case suggérée est cochée", async () => {
-    const body = buildCommentBody(["bug"], ["bug", "feature"]);
-    const ctx = createMockContext(body, []);
+  it("applique le label préfixé quand une suggestion stockée est cochée", async () => {
+    const ctx = createMockContext(
+      buildCommentBody(["bug"], ["bug", "feature"]),
+      [],
+    );
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handleIssueCommentEdited(ctx as any);
@@ -62,9 +89,10 @@ describe("handleIssueCommentEdited — labels préfixés par l'icône IA", () =>
     );
   });
 
-  it("retire le label préfixé 🤖 quand la case suggérée est décochée", async () => {
-    const body = buildCommentBody([], ["bug", "feature"]);
-    const ctx = createMockContext(body, [toAiLabelName("bug")]);
+  it("retire uniquement le label préfixé quand sa case est décochée", async () => {
+    const ctx = createMockContext(buildCommentBody([], ["bug", "feature"]), [
+      toAiLabelName("bug"),
+    ]);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handleIssueCommentEdited(ctx as any);
@@ -74,25 +102,67 @@ describe("handleIssueCommentEdited — labels préfixés par l'icône IA", () =>
     );
   });
 
-  it("ne touche pas un label identique posé manuellement (sans le préfixe 🤖)", async () => {
-    // "bug" est présent sans préfixe : label posé par un humain, pas par le bot.
-    const body = buildCommentBody([], ["bug", "feature"]);
-    const ctx = createMockContext(body, ["bug"]);
+  it("ne retire jamais le label manuel portant le même nom", async () => {
+    const ctx = createMockContext(buildCommentBody([], ["bug", "feature"]), [
+      "bug",
+    ]);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await handleIssueCommentEdited(ctx as any);
 
-    // "bug" (sans préfixe) correspond bien au nom de base suggéré : la case
-    // décochée retire ce label, quelle que soit son origine (comportement
-    // volontaire déjà existant, limité au périmètre des labels suggérés).
-    expect(ctx.octokit.issues.removeLabel).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "bug" }),
-    );
+    expect(ctx.octokit.issues.removeLabel).not.toHaveBeenCalled();
   });
 
-  it("ignore les éditions faites par le bot (anti-boucle)", async () => {
-    const body = buildCommentBody(["bug"], ["bug"]);
-    const ctx = createMockContext(body, []);
+  it("ignore un commentaire humain qui copie le marker", async () => {
+    const ctx = createMockContext(buildCommentBody(["bug"], ["bug"]), []);
+    ctx.payload.comment.user.type = "User";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleIssueCommentEdited(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("ignore une case qui ne faisait pas partie des suggestions stockées", async () => {
+    const original = buildCommentBody([], ["bug"]);
+    const forged = original.replace(
+      renderAnalysisDataBlock(
+        {
+          suggestions: [{ name: "bug", confidence: 0.9, reason: "raison" }],
+          summary: "résumé",
+        },
+        "head-123",
+      ),
+      `- [x] \`${toAiLabelName("admin")}\` — 99% — forgé\n${renderAnalysisDataBlock(
+        {
+          suggestions: [{ name: "bug", confidence: 0.9, reason: "raison" }],
+          summary: "résumé",
+        },
+        "head-123",
+      )}`,
+    );
+    const ctx = createMockContext(forged, []);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleIssueCommentEdited(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("ignore un état associé à un ancien head SHA", async () => {
+    const ctx = createMockContext(buildCommentBody(["bug"], ["bug"]), []);
+    ctx.octokit.pulls.get.mockResolvedValue({
+      data: { head: { sha: "new-head" } },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handleIssueCommentEdited(ctx as any);
+
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("ignore les éditions faites par le bot", async () => {
+    const ctx = createMockContext(buildCommentBody(["bug"], ["bug"]), []);
     ctx.payload.sender.type = "Bot";
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

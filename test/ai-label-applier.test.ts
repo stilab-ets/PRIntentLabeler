@@ -62,10 +62,7 @@ describe("applyAiSuggestedLabels", () => {
 
   it("applique plusieurs labels en une seule fois", async () => {
     const octokit = createOctokit();
-    await applyAiSuggestedLabels(octokit, "org", "repo", 1, [
-      "bug",
-      "feature",
-    ]);
+    await applyAiSuggestedLabels(octokit, "org", "repo", 1, ["bug", "feature"]);
 
     expect(octokit.issues.addLabels).toHaveBeenCalledWith(
       expect.objectContaining({ labels: ["🤖 bug", "🤖 feature"] }),
