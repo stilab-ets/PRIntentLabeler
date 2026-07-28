@@ -380,8 +380,8 @@ facturation directement chez le fournisseur.
 - ✅ Itération 1 : intégration GitHub et gestion des webhooks
 - ✅ Itération 2 : intégration Groq et modes d'application des labels
 - ✅ Amélioration de la sélection et du scoring des fichiers
-- 🚧 Configuration multi-fournisseurs par installation
-- ⏳ Évaluation à grande échelle sur un corpus de Pull Requests
+- ✅ Configuration multi-fournisseurs par installation
+- 🚧 Évaluation à grande échelle sur un corpus de Pull Requests
 - ⏳ Finalisation, documentation et rapport
 
 ## Documentation
