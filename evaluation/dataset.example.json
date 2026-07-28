@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "pullRequests": [
+    {
+      "id": "example-pr-1",
+      "title": "fix: prevent duplicate invoice totals",
+      "body": "Synthetic example used only to document the dataset format.",
+      "expectedLabels": ["bug"],
+      "repositoryLabels": ["bug", "feature", "documentation"],
+      "repositoryLabelDescriptions": {
+        "bug": "Corrects an unintended behavior"
+      },
+      "files": [
+        {
+          "filename": "src/invoice/calculateTotal.ts",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "changes": 6,
+          "patch": "@@ -10,3 +10,5 @@\n-oldTotal\n+newTotal"
+        }
+      ]
+    }
+  ]
+}

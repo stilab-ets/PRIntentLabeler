@@ -6,18 +6,25 @@ import { GroqProvider } from "../llm/groq-provider.js";
 import type { LlmProvider } from "../llm/llm-provider.js";
 import { buildPullRequestLlmContext } from "../llm/pr-context.js";
 import { filterValidSuggestions } from "../labels/label-policy.js";
-import { resolveLabelMode, selectLabelsToApply, selectSuggestedLabelsBelowThreshold } from "../labels/label-mode.js";
+import {
+  resolveLabelMode,
+  selectLabelsToApply,
+  selectSuggestedLabelsBelowThreshold,
+} from "../labels/label-mode.js";
 import { removeLabels } from "../labels/label-applier.js";
 import { applyAiSuggestedLabels } from "../labels/ai-label-applier.js";
 import { createLabelerCheckRun } from "../github/check-run.js";
 import { MAX_LABELS_TO_APPLY } from "../utils/constants.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
+import type { GroqUsageMetrics } from "../llm/groq-provider.js";
 
-function createGroqProvider(): LlmProvider | null {
+function createGroqProvider(
+  onUsage: (metrics: GroqUsageMetrics) => void,
+): LlmProvider | null {
   const apiKey = process.env.GROQ_API_KEY;
   const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
   if (!apiKey || apiKey === "REMPLACER_PAR_VOTRE_CLE") return null;
-  return new GroqProvider(apiKey, model);
+  return new GroqProvider(apiKey, model, onUsage);
 }
 
 export async function handlePullRequestEvent(
@@ -43,15 +50,43 @@ export async function handlePullRequestEvent(
     context.log.info(
       {
         ...logContext,
-        selectedFiles: llmContext.selectedFilesCount,
-        ignoredFiles: llmContext.ignoredFilesCount,
+        selectedFilesCount: llmContext.selectedFilesCount,
+        summaryOnlyFilesCount: llmContext.summaryOnlyFilesCount,
+        // Détail par fichier sélectionné : permet de vérifier immédiatement
+        // qu'un lockfile, un snapshot ou un fichier généré n'est jamais
+        // réellement envoyé au LLM (seul le rôle "include-patch" doit apparaître).
+        selectedFiles: llmContext.selectedFiles.map((ranked) => ({
+          filename: ranked.file.filename,
+          role: ranked.role,
+          score: ranked.score,
+          contentPolicy: ranked.contentPolicy,
+          reasons: ranked.reasons,
+        })),
+        estimatedTotalTokens:
+          llmContext.promptBudget.finalPromptEstimatedTokens +
+          llmContext.promptBudget.responseReserveTokens,
+        estimatedNonPatchTokens:
+          llmContext.promptBudget.nonPatchEstimatedTokens,
+        availablePatchTokens: llmContext.promptBudget.availablePatchTokens,
+        allocatedPatchTokens: llmContext.promptBudget.allocatedPatchTokens,
+        patchAllocations: llmContext.promptBudget.files,
+        truncatedFiles: llmContext.promptBudget.files
+          .filter((file) => file.truncated)
+          .map((file) => file.filename),
       },
       "Filtered LLM context built",
     );
 
     let analysis: PullRequestAnalysis | null = null;
     const provider =
-      providerOverride !== undefined ? providerOverride : createGroqProvider();
+      providerOverride !== undefined
+        ? providerOverride
+        : createGroqProvider((usage) =>
+            context.log.info(
+              { ...logContext, ...usage },
+              "Groq token usage measured",
+            ),
+          );
 
     if (provider) {
       try {
@@ -133,9 +168,7 @@ export async function handlePullRequestEvent(
               ...logContext,
               mode,
               error:
-                applyError instanceof Error
-                  ? applyError.message
-                  : applyError,
+                applyError instanceof Error ? applyError.message : applyError,
             },
             "Failed to apply labels, keeping suggestions only",
           );
@@ -160,17 +193,12 @@ export async function handlePullRequestEvent(
               .map((s) => s.name)
               .join(", ")}.`
           : "Aucune suggestion de label pour cette PR.";
-      await createLabelerCheckRun(
-        context,
-        pull_request.head.sha,
-        checkSummary,
-      );
+      await createLabelerCheckRun(context, pull_request.head.sha, checkSummary);
     } catch (checkError) {
       context.log.warn(
         {
           ...logContext,
-          error:
-            checkError instanceof Error ? checkError.message : checkError,
+          error: checkError instanceof Error ? checkError.message : checkError,
         },
         "Failed to create check run (checks:write manquant ?)",
       );

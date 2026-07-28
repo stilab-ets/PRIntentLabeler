@@ -41,10 +41,15 @@ export async function handleCheckRunRequestedAction(
 
   try {
     // On récupère l'analyse stockée dans le commentaire (pas de rappel LLM).
-    const existing = await findBotComment(context.octokit, owner, repo, pr.number);
-    const analysis = existing ? parseAnalysisDataBlock(existing.body) : null;
+    const existing = await findBotComment(
+      context.octokit,
+      owner,
+      repo,
+      pr.number,
+    );
+    const stored = existing ? parseAnalysisDataBlock(existing.body) : null;
 
-    if (!analysis || analysis.suggestions.length === 0) {
+    if (!stored?.verified || stored.analysis.suggestions.length === 0) {
       context.log.warn(logContext, "No stored suggestions to act on");
       return;
     }
@@ -55,6 +60,31 @@ export async function handleCheckRunRequestedAction(
       repo,
       pr.number,
     );
+
+    // Protection contre une analyse périmée : un nouveau push a pu arriver
+    // entre l'analyse initiale et le clic sur le bouton. On refuse d'agir si
+    // le SHA stocké ne correspond plus au SHA de la Check Run ou de la PR
+    // actuelle (ou si le commentaire est un ancien format sans SHA du tout).
+    const checkRunHeadSha = checkRun.head_sha;
+    const isStale =
+      !stored.headSha ||
+      stored.headSha !== checkRunHeadSha ||
+      stored.headSha !== prData.headSha;
+
+    if (isStale) {
+      context.log.warn(
+        {
+          ...logContext,
+          storedHeadSha: stored.headSha,
+          checkRunHeadSha,
+          currentHeadSha: prData.headSha,
+        },
+        "Stored analysis is stale or unverifiable (head sha mismatch); refusing to apply/remove labels",
+      );
+      return;
+    }
+
+    const analysis = stored.analysis;
     const llmContext = buildPullRequestLlmContext(prData);
 
     let appliedLabels: string[] = [];
@@ -112,7 +142,12 @@ export async function handleCheckRunRequestedAction(
       return;
     }
 
-    const body = buildAnalysisComment(prData, llmContext, analysis, appliedLabels);
+    const body = buildAnalysisComment(
+      prData,
+      llmContext,
+      analysis,
+      appliedLabels,
+    );
     await upsertComment(context.octokit, owner, repo, pr.number, body);
 
     context.log.info(
