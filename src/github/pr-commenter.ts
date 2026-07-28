@@ -1,26 +1,45 @@
 import type { Context } from "probot";
 import { BOT_COMMENT_MARKER } from "../utils/constants.js";
+import { listAllPages } from "./pagination.js";
 
 type OctokitLike = Context<"check_run">["octokit"];
 
 export type BotComment = { id: number; body: string };
 
-// Retrouve le commentaire de l'app (identifié par son marker) sur une issue/PR.
+type CommentIdentity = {
+  body?: string | null;
+  user?: { type?: string } | null;
+  performed_via_github_app?: { id?: number } | null;
+};
+
+export function isCommentOwnedByApp(comment: CommentIdentity): boolean {
+  if (comment.user?.type !== "Bot") return false;
+
+  const expectedAppId = Number.parseInt(process.env.APP_ID ?? "", 10);
+  if (Number.isFinite(expectedAppId)) {
+    return comment.performed_via_github_app?.id === expectedAppId;
+  }
+
+  return Boolean(comment.performed_via_github_app?.id);
+}
+
 export async function findBotComment(
   octokit: OctokitLike,
   owner: string,
   repo: string,
   issueNumber: number,
 ): Promise<BotComment | null> {
-  const commentsResponse = await octokit.issues.listComments({
+  const comments = await listAllPages(octokit, octokit.issues.listComments, {
     owner,
     repo,
     issue_number: issueNumber,
     per_page: 100,
   });
 
-  const existing = commentsResponse.data.find((comment) =>
-    comment.body?.includes(BOT_COMMENT_MARKER),
+  const existing = comments.find(
+    (comment) =>
+      comment.body?.startsWith(BOT_COMMENT_MARKER) &&
+      isCommentOwnedByApp(comment),
   );
 
   return existing ? { id: existing.id, body: existing.body ?? "" } : null;

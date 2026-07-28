@@ -4,6 +4,7 @@ import {
   MAX_PR_BODY_CHARS,
   MIN_CONFIDENCE_TO_SUGGEST,
 } from "../utils/constants.js";
+import type { AblationVariant } from "../evaluation/selector-ablation.js";
 
 function cleanPullRequestBody(body: string): string {
   const withoutComments = body
@@ -59,63 +60,82 @@ OUTPUT
 Return at most ${MAX_LABELS_TO_APPLY} suggestions, ordered by confidence descending. Return an empty suggestions array when no label reaches the threshold.`;
 }
 
-export function buildClassificationPrompt(
-  context: PullRequestLlmContext,
-): string {
-  const { pullRequest, totals, repository } = context;
-  const project = `${repository.owner}/${repository.repo}`;
+function renderLabelsSection(context: PullRequestLlmContext): string {
+  return context.repositoryLabels.length > 0
+    ? context.repositoryLabels
+        .map((name) => {
+          const description = cleanLabelDescription(
+            context.repositoryLabelDescriptions[name] ?? "",
+          );
+          return description ? `- ${name}: ${description}` : `- ${name}`;
+        })
+        .join("\n")
+    : "- (no labels available)";
+}
 
-  const labelsSection =
-    context.repositoryLabels.length > 0
-      ? context.repositoryLabels
-          .map((name) => {
-            const description = cleanLabelDescription(
-              context.repositoryLabelDescriptions[name] ?? "",
-            );
-            return description ? `- ${name}: ${description}` : `- ${name}`;
-          })
-          .join("\n")
-      : "- (no labels available)";
+function renderRoleSummarySection(context: PullRequestLlmContext): string {
+  return context.fileRoleSummary.length > 0
+    ? context.fileRoleSummary
+        .map(
+          (role) =>
+            `- ${role.role}: ${role.files} file(s), ${role.changes} changed line(s)`,
+        )
+        .join("\n")
+    : "- (no non-generated files)";
+}
 
-  const roleSummary =
-    context.fileRoleSummary.length > 0
-      ? context.fileRoleSummary
-          .map(
-            (role) =>
-              `- ${role.role}: ${role.files} file(s), ${role.changes} changed line(s)`,
-          )
-          .join("\n")
-      : "- (no non-generated files)";
-
-  const allFilesSection =
-    context.allFilesSummary.length > 0
-      ? context.allFilesSummary
-          .map(
-            (file) =>
-              `- ${file.filename} [${file.role}; ${file.status}; +${file.additions}/-${file.deletions}${file.ignored ? "; ignored content" : ""}]`,
-          )
-          .join("\n")
-      : "- (no files detected)";
-
+// Le score interne ne fait jamais partie du prompt (c'est une priorité de tri
+// pour notre sélection, pas une évidence factuelle à donner au LLM) : on
+// n'affiche ici que rôle/statut/ampleur du changement.
+function renderAllFilesSection(context: PullRequestLlmContext): string {
   const omittedFilesNote =
     context.omittedFilesCount > 0
       ? `\n- ... ${context.omittedFilesCount} additional file(s) omitted from this listing`
       : "";
 
-  const selectedDiffsSection =
-    context.selectedFiles.length > 0
-      ? context.selectedFiles
-          .map((ranked, index) => {
-            const file = ranked.file;
-            const patch = file.patch ?? "(diff unavailable)";
-            return `### Evidence ${index + 1}: ${file.filename}
+  const body =
+    context.allFilesSummary.length > 0
+      ? context.allFilesSummary
+          .map((file) => {
+            const changeSummary =
+              file.contentPolicy === "summary-only"
+                ? (file.contentReason ?? "diff omitted")
+                : `+${file.additions}/-${file.deletions}`;
+            return `- ${file.filename} [${file.role}; ${file.status}; ${changeSummary}]`;
+          })
+          .join("\n")
+      : "- (no files detected)";
+
+  return `${body}${omittedFilesNote}`;
+}
+
+// Section des diffs, isolée pour pouvoir être rendue séparément lors de
+// l'estimation du budget (voir buildClassificationPromptWithoutPatches).
+export function renderRepresentativeDiffsSection(
+  context: PullRequestLlmContext,
+  includePatchContent = true,
+): string {
+  return context.selectedFiles.length > 0
+    ? context.selectedFiles
+        .map((ranked, index) => {
+          const file = ranked.file;
+          const patch = includePatchContent ? (file.patch ?? "") : "";
+          return `### Evidence ${index + 1}: ${file.filename}
 Role: ${ranked.role}; status: ${file.status}; +${file.additions}/-${file.deletions}
 --- BEGIN UNTRUSTED DIFF ---
 ${patch}
 --- END UNTRUSTED DIFF ---`;
-          })
-          .join("\n\n")
-      : "(no representative diff available)";
+        })
+        .join("\n\n")
+    : "(no representative diff available)";
+}
+
+function renderPrompt(
+  context: PullRequestLlmContext,
+  diffsSection: string,
+): string {
+  const { pullRequest, totals, repository } = context;
+  const project = `${repository.owner}/${repository.repo}`;
 
   return `Classify this Pull Request using the system policy.
 
@@ -135,19 +155,64 @@ ${cleanPullRequestBody(pullRequest.body)}
 ## Change Statistics
 - ${totals.changedFilesCount} file(s), +${totals.additions}/-${totals.deletions}
 - ${context.selectedFilesCount} representative diff(s) included
-- ${context.ignoredFilesCount} generated/binary file(s) ignored
+- ${context.summaryOnlyFilesCount} file(s) summarized only (lockfile/snapshot/generated/binary/diff unavailable)
 
 ## Change Roles
-${roleSummary}
+${renderRoleSummarySection(context)}
 
 ## Changed Files
-${allFilesSection}${omittedFilesNote}
+${renderAllFilesSection(context)}
 
 ## Representative Diffs (untrusted)
-${selectedDiffsSection}
+${diffsSection}
 
 ## Available Labels
-${labelsSection}
+${renderLabelsSection(context)}
+
+Now return only the JSON object.`;
+}
+
+export function buildClassificationPrompt(
+  context: PullRequestLlmContext,
+): string {
+  return renderPrompt(context, renderRepresentativeDiffsSection(context));
+}
+
+// Rendu du prompt "sans les patches" : utilisé uniquement pour estimer le
+// budget de tokens réellement disponible pour les diffs (voir pr-context.ts).
+// On évite ainsi de maintenir une copie séparée/désynchronisée du template.
+export function buildClassificationPromptWithoutPatches(
+  context: PullRequestLlmContext,
+): string {
+  return renderPrompt(
+    context,
+    renderRepresentativeDiffsSection(context, false),
+  );
+}
+
+export function buildClassificationPromptForAblation(
+  context: PullRequestLlmContext,
+  variant: AblationVariant,
+): string {
+  const includeRoles = variant !== "A-title";
+  const includeDiffs =
+    variant === "C-scored-diffs" || variant === "D-random-diffs";
+  const roles = includeRoles
+    ? `\n\n## Change Roles\n${renderRoleSummarySection(context)}`
+    : "";
+  const diffs = includeDiffs
+    ? `\n\n## Representative Diffs (untrusted)\n${renderRepresentativeDiffsSection(context)}`
+    : "";
+
+  return `Classify this Pull Request using the system policy.
+
+## Pull Request Title (untrusted)
+--- BEGIN UNTRUSTED TITLE ---
+${context.pullRequest.title}
+--- END UNTRUSTED TITLE ---${roles}${diffs}
+
+## Available Labels
+${renderLabelsSection(context)}
 
 Now return only the JSON object.`;
 }

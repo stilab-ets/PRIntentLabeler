@@ -64,19 +64,20 @@ describe("selectLabelsToApply", () => {
 });
 
 describe("selectSuggestedLabelsBelowThreshold", () => {
-  it("retire les labels suggérés présents sur la PR sous le seuil", () => {
-    const result = selectSuggestedLabelsBelowThreshold(
-      suggestions,
-      ["bug", "tests", "wontfix"],
-    );
-    expect(result).toEqual(["tests"]);
+  it("ne retire pas un label manuel sous le seuil", () => {
+    const result = selectSuggestedLabelsBelowThreshold(suggestions, [
+      "bug",
+      "tests",
+      "wontfix",
+    ]);
+    expect(result).toEqual([]);
   });
 
   it("ne retire pas les labels hors suggestions ni ceux au-dessus du seuil", () => {
-    const result = selectSuggestedLabelsBelowThreshold(
-      suggestions,
-      ["security", "wontfix"],
-    );
+    const result = selectSuggestedLabelsBelowThreshold(suggestions, [
+      "security",
+      "wontfix",
+    ]);
     expect(result).toEqual([]);
   });
 

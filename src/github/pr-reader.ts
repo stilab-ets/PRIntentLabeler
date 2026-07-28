@@ -52,6 +52,7 @@ export async function readPullRequestData(
     author: pr.user?.login ?? "unknown",
     baseBranch: pr.base.ref,
     headBranch: pr.head.ref,
+    headSha: pr.head.sha,
     htmlUrl: pr.html_url,
     additions: pr.additions ?? 0,
     deletions: pr.deletions ?? 0,

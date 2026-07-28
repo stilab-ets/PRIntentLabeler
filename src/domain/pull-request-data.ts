@@ -16,6 +16,10 @@ export type PullRequestData = {
   author: string;
   baseBranch: string;
   headBranch: string;
+  // SHA du dernier commit de la PR au moment de la lecture : sert à détecter
+  // une analyse périmée (voir StoredAnalysisState) quand une action de Check
+  // Run est déclenchée après un nouveau push.
+  headSha: string;
   htmlUrl: string;
   additions: number;
   deletions: number;
@@ -38,13 +42,19 @@ export type PullRequestFileRole =
   | "other"
   | "generated";
 
+// Politique d'envoi du contenu au LLM, distincte du rôle sémantique : un
+// fichier peut être important pour comprendre l'intention (ex. lockfile)
+// sans que son patch, souvent énorme ou sans valeur sémantique, soit envoyé.
+export type FileContentPolicy = "include-patch" | "summary-only";
+
 // Fichier auquel on a attribué un score d'importance pour la sélection LLM.
 export type RankedPullRequestFile = {
   file: PullRequestFileData;
   score: number;
   reasons: string[];
-  ignored: boolean;
   role: PullRequestFileRole;
+  contentPolicy: FileContentPolicy;
+  contentReason?: string;
 };
 
 // Résumé léger (sans patch) d'un fichier, utilisé dans le contexte global.
@@ -55,8 +65,9 @@ export type RankedFileSummary = {
   deletions: number;
   changes: number;
   score: number;
-  ignored: boolean;
   role: PullRequestFileRole;
+  contentPolicy: FileContentPolicy;
+  contentReason?: string;
 };
 
 export type FileRoleSummary = {
@@ -90,7 +101,24 @@ export type PullRequestLlmContext = {
   allFilesSummary: RankedFileSummary[];
   fileRoleSummary: FileRoleSummary[];
   selectedFiles: RankedPullRequestFile[];
-  ignoredFilesCount: number;
+  // Fichiers dont le patch n'est jamais envoyé (lockfile, snapshot, généré,
+  // binaire...) : ils restent visibles comme signal dans le résumé global.
+  summaryOnlyFilesCount: number;
   omittedFilesCount: number;
   selectedFilesCount: number;
+  promptBudget: {
+    contextLimitTokens: number;
+    responseReserveTokens: number;
+    nonPatchEstimatedTokens: number;
+    availablePatchTokens: number;
+    allocatedPatchTokens: number;
+    finalPromptEstimatedTokens: number;
+    files: {
+      filename: string;
+      naturalTokens: number;
+      allocatedTokens: number;
+      actualTokens: number;
+      truncated: boolean;
+    }[];
+  };
 };

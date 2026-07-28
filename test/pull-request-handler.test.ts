@@ -11,7 +11,7 @@ function createMockContext(throwOnReader = false) {
         body: "",
         user: { login: "test-user" },
         base: { ref: "main" },
-        head: { ref: "feature" },
+        head: { ref: "feature", sha: "sha-feature" },
         html_url: "",
         additions: 1,
         deletions: 0,
