@@ -78,10 +78,7 @@ export async function handlePullRequestEvent(
     // Journalise les jetons réellement facturés par le fournisseur retenu,
     // quel qu'il soit, afin de valider notre estimation locale du budget.
     const onUsage = (usage: LlmUsageMetrics) =>
-      context.log.info(
-        { ...logContext, ...usage },
-        "LLM token usage measured",
-      );
+      context.log.info({ ...logContext, ...usage }, "LLM token usage measured");
 
     if (providerOverride !== undefined) {
       provider = providerOverride;
