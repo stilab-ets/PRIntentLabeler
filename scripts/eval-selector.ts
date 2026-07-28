@@ -170,9 +170,14 @@ if (!process.env.GROQ_API_KEY) {
 const dataset = await loadDataset(datasetPath);
 const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
 let latestUsage: GroqUsageMetrics | null = null;
-const provider = new GroqProvider(process.env.GROQ_API_KEY, model, (usage) => {
-  latestUsage = usage;
-});
+const provider = new GroqProvider(
+  process.env.GROQ_API_KEY,
+  model,
+  undefined,
+  (usage) => {
+    latestUsage = usage;
+  },
+);
 const results: Result[] = [];
 
 for (let index = 0; index < dataset.pullRequests.length; index += 1) {

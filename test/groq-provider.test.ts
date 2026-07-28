@@ -1,17 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPullRequestLlmContext } from "../src/llm/pr-context.js";
 import { GroqProvider } from "../src/llm/groq-provider.js";
 import type { PullRequestData } from "../src/domain/pull-request-data.js";
-
-const { createCompletion } = vi.hoisted(() => ({
-  createCompletion: vi.fn(),
-}));
-
-vi.mock("groq-sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    chat: { completions: { create: createCompletion } },
-  })),
-}));
 
 const prData: PullRequestData = {
   owner: "org",
@@ -41,13 +31,20 @@ const prData: PullRequestData = {
   pullRequestLabels: [],
 };
 
+function mockFetchResponse(body: unknown, status = 200): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status })),
+  );
+}
+
 describe("GroqProvider", () => {
-  beforeEach(() => {
-    createCompletion.mockReset();
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("retourne les suggestions et publie les métriques réelles d'usage", async () => {
-    createCompletion.mockResolvedValue({
+    mockFetchResponse({
       choices: [
         {
           message: {
@@ -67,7 +64,7 @@ describe("GroqProvider", () => {
       },
     });
     const onUsage = vi.fn();
-    const provider = new GroqProvider("key", "test-model", onUsage);
+    const provider = new GroqProvider("key", "test-model", undefined, onUsage);
 
     const result = await provider.classifyPullRequest(
       buildPullRequestLlmContext(prData),
@@ -76,6 +73,7 @@ describe("GroqProvider", () => {
     expect(result.suggestions[0].confidence).toBe(1);
     expect(onUsage).toHaveBeenCalledWith(
       expect.objectContaining({
+        provider: "Groq",
         model: "test-model",
         promptTokens: 321,
         completionTokens: 45,
@@ -88,14 +86,37 @@ describe("GroqProvider", () => {
   });
 
   it("n'invente aucune métrique lorsque Groq ne retourne pas usage", async () => {
-    createCompletion.mockResolvedValue({
+    mockFetchResponse({
       choices: [{ message: { content: '{"suggestions":[],"summary":""}' } }],
     });
     const onUsage = vi.fn();
-    const provider = new GroqProvider("key", "test-model", onUsage);
+    const provider = new GroqProvider("key", "test-model", undefined, onUsage);
 
     await provider.classifyPullRequest(buildPullRequestLlmContext(prData));
 
     expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("appelle l’endpoint Groq par défaut avec le bon Bearer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
+        {
+          status: 200,
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new GroqProvider("secret-groq", "test-model").checkConnection();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.groq.com/openai/v1/chat/completions",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-groq",
+        }),
+      }),
+    );
   });
 });

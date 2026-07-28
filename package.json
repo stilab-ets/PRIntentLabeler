@@ -13,17 +13,22 @@
     "test:coverage": "vitest run --coverage",
     "evaluate:selection": "node --import tsx scripts/evaluate-file-selection.ts",
     "eval:selector": "node --import tsx scripts/eval-selector.ts",
+    "db:migrate": "node --import tsx scripts/migrate-database.ts",
     "lint": "eslint src test scripts --ext .ts",
     "format": "prettier --write \"{src,test,scripts}/**/*.ts\"",
     "format:check": "prettier --check \"{src,test,scripts}/**/*.ts\""
   },
   "dependencies": {
-    "groq-sdk": "^1.2.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
     "probot": "^13.4.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
+    "@types/pg": "^8.20.0",
     "@vitest/coverage-v8": "^2.1.8",
     "eslint": "^9.18.0",
     "prettier": "^3.4.2",
