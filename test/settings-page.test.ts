@@ -34,8 +34,6 @@ describe("renderSettingsPage", () => {
   it("encode correctement le formulaire de test de connexion", () => {
     const script = renderSettingsClientScript();
 
-    expect(script).toContain(
-      "new URLSearchParams(new FormData(form))",
-    );
+    expect(script).toContain("new URLSearchParams(new FormData(form))");
   });
 });

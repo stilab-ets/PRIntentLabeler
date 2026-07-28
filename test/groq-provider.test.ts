@@ -99,9 +99,12 @@ describe("GroqProvider", () => {
 
   it("appelle l’endpoint Groq par défaut avec le bon Bearer", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
-        status: 200,
-      }),
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
+        {
+          status: 200,
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
