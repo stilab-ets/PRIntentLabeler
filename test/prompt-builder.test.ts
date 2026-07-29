@@ -78,7 +78,9 @@ describe("buildClassificationPrompt", () => {
     const systemPrompt = buildClassificationSystemPrompt();
     expect(systemPrompt).toContain('"suggestions"');
     expect(systemPrompt).toContain('"summary"');
-    expect(systemPrompt).toContain("Return only a valid JSON object");
+    expect(systemPrompt).toContain(
+      "Return exactly one valid JSON object and no other text",
+    );
   });
 
   it("sépare les règles système du contenu non fiable de la PR", () => {

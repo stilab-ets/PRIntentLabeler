@@ -129,7 +129,7 @@ export async function handlePullRequestEvent(
           ...raw,
           suggestions: filterValidSuggestions(
             raw.suggestions,
-            prData.repositoryLabels,
+            llmContext.repositoryLabels,
             undefined,
             MAX_LABELS_TO_APPLY,
           ),
