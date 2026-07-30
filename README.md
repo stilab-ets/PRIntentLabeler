@@ -157,44 +157,114 @@ de l'application, puis accepter les nouvelles permissions sur l'installation.
 
 ### 4. Configurer les variables d'environnement
 
-Si le wizard n'a pas créé le fichier `.env`, copier l'exemple :
+Chaque développeur doit posséder son propre fichier `.env` à la racine du
+projet. Ce fichier n'est pas récupéré avec `git clone`, puisqu'il contient des
+secrets et doit être ignoré par Git.
+
+Si le wizard Probot n'a pas créé le fichier, copier l'exemple :
 
 ```bash
 cp .env.example .env
 ```
 
-Variables utilisées :
+Sous PowerShell, utiliser plutôt :
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Compléter ensuite le fichier avec la configuration suivante :
 
 ```env
-# GitHub App et webhooks
-APP_ID=
-WEBHOOK_SECRET=
-PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-WEBHOOK_PROXY_URL=https://smee.io/votre-canal
+# ============================================================
+# GitHub App — obligatoire
+# Valeurs propres à la GitHub App de développement
+# ============================================================
+APP_ID=1234567
+WEBHOOK_SECRET=remplacer-par-un-secret-de-webhook
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nREMPLACER_PAR_LA_CLE_PRIVEE\n-----END RSA PRIVATE KEY-----"
 
-# PostgreSQL
+# Canal Smee utilisé uniquement pour recevoir les webhooks en local
+WEBHOOK_PROXY_URL=https://smee.io/remplacer-par-votre-canal
+
+# ============================================================
+# PostgreSQL — obligatoire pour /settings et le multi-fournisseur
+# Les valeurs ci-dessous correspondent au compose.yml par défaut
+# ============================================================
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/pr_intent_labeler
 DATABASE_SSL=false
 
-# Chiffrement des clés API enregistrées
-CONFIG_ENCRYPTION_KEY=
+# ============================================================
+# Chiffrement — obligatoire
+# Clé aléatoire de 32 octets encodée en base64
+# ============================================================
+CONFIG_ENCRYPTION_KEY=remplacer-par-la-cle-generee
 
-# OAuth GitHub pour l'interface de configuration
-GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
+# ============================================================
+# OAuth GitHub — obligatoire pour accéder à /settings
+# Valeurs disponibles dans les paramètres de la GitHub App
+# ============================================================
+GITHUB_CLIENT_ID=remplacer-par-le-client-id
+GITHUB_CLIENT_SECRET=remplacer-par-le-client-secret
 PUBLIC_BASE_URL=http://localhost:3000
 
-# Repli Groq facultatif
-GROQ_API_KEY=
+# ============================================================
+# Configuration Groq de repli — facultative
+# Utilisée seulement lorsqu'une installation n'a aucune
+# configuration LLM enregistrée dans PostgreSQL
+# ============================================================
+GROQ_API_KEY=remplacer-par-une-cle-groq-ou-laisser-vide
 GROQ_MODEL=llama-3.1-8b-instant
 
-# Application
+# ============================================================
+# Comportement de l'application
+# suggest | auto-high | auto-all
+# ============================================================
 LABEL_MODE=suggest
 LOG_LEVEL=debug
 NODE_ENV=development
 ```
 
-Ne jamais committer `.env`, une clé privée `*.pem` ou une clé API.
+Les valeurs d'exemple doivent être remplacées. Ne jamais réutiliser la clé
+privée ou les secrets d'un autre développeur pour une installation locale.
+
+Rôle des variables :
+
+| Variable                | Obligatoire | Utilisation                                             |
+| ----------------------- | ----------- | ------------------------------------------------------- |
+| `APP_ID`                | Oui         | Identifie la GitHub App                                 |
+| `WEBHOOK_SECRET`        | Oui         | Vérifie que les webhooks proviennent de GitHub          |
+| `PRIVATE_KEY`           | Oui         | Authentifie la GitHub App auprès de GitHub               |
+| `WEBHOOK_PROXY_URL`     | En local    | Transmet les webhooks Smee vers `localhost`              |
+| `DATABASE_URL`          | Oui         | Connexion à PostgreSQL                                   |
+| `DATABASE_SSL`          | Oui         | Active ou désactive TLS pour PostgreSQL                  |
+| `CONFIG_ENCRYPTION_KEY` | Oui         | Chiffre les clés API enregistrées                        |
+| `GITHUB_CLIENT_ID`      | Oui         | Démarre l'authentification OAuth de `/settings`          |
+| `GITHUB_CLIENT_SECRET`  | Oui         | Termine l'authentification OAuth                         |
+| `PUBLIC_BASE_URL`       | Oui         | URL publique ou locale utilisée par l'interface          |
+| `GROQ_API_KEY`          | Non         | Fournisseur de repli si aucune configuration n'existe    |
+| `GROQ_MODEL`            | Non         | Modèle Groq de repli                                     |
+| `LABEL_MODE`            | Oui         | Contrôle l'application automatique des labels            |
+| `LOG_LEVEL`             | Non         | Définit le niveau de détail des journaux                 |
+| `NODE_ENV`              | Oui         | Sélectionne le comportement développement ou production |
+
+Ne jamais committer :
+
+- le fichier `.env`;
+- une clé privée `*.pem`;
+- une clé API de fournisseur;
+- `GITHUB_CLIENT_SECRET`;
+- `CONFIG_ENCRYPTION_KEY`.
+
+Vérifier avant chaque commit :
+
+```bash
+git status --short
+git check-ignore .env
+```
+
+La deuxième commande doit retourner `.env`, ce qui confirme que le fichier est
+bien ignoré par Git.
 
 ### 5. Générer la clé de chiffrement
 
