@@ -159,7 +159,11 @@ export async function handlePullRequestEvent(
         context.log.warn(
           {
             ...logContext,
+            // Le type distingue un rejet HTTP, une réponse vide (modèle à
+            // raisonnement ayant épuisé son plafond) et une sortie non conforme.
+            errorType: llmError instanceof Error ? llmError.name : "Unknown",
             error: llmError instanceof Error ? llmError.message : llmError,
+            promptVersion: CLASSIFICATION_PROMPT_VERSION,
           },
           "LLM call failed, posting comment without suggestions",
         );

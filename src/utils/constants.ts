@@ -19,8 +19,14 @@ export const MAX_TOTAL_PATCH_TOKENS = 2_500;
 
 // Ce budget limite une requête. Les limites TPM, la concurrence et les retries
 // doivent être gérés séparément.
-export const MAX_LLM_CONTEXT_TOKENS = 6_000;
-export const LLM_RESPONSE_TOKEN_RESERVE = 1_000;
+export const MAX_LLM_CONTEXT_TOKENS = 8_000;
+
+// Plafond de jetons accordé à la réponse du modèle, aussi utilisé comme
+// `max_tokens` par les fournisseurs. Le JSON attendu est court, mais les modèles
+// à raisonnement (Gemini 2.5+, o-series, R1) imputent leurs jetons de réflexion
+// sur ce même plafond : trop bas, ils épuisent le budget en réfléchissant et
+// renvoient une réponse vide. On garde donc une marge large.
+export const LLM_RESPONSE_TOKEN_RESERVE = 3_000;
 
 // Les limites en caractères restent utiles à la troncature et sont dérivées
 // du budget de tokens pour éviter deux configurations contradictoires.

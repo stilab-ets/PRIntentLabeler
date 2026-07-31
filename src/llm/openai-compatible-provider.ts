@@ -2,12 +2,16 @@ import type { PullRequestLlmContext } from "../domain/pull-request-data.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import { parsePullRequestAnalysis } from "./classification-parser.js";
 import type { LlmProvider } from "./llm-provider.js";
-import { LlmProviderRequestError } from "./provider-error.js";
+import {
+  LlmEmptyResponseError,
+  LlmProviderRequestError,
+} from "./provider-error.js";
 import { estimateTokens } from "./patch-utils.js";
 import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
+import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
 
 // Métriques comparant les jetons réellement facturés par le fournisseur à
 // notre estimation locale, pour surveiller la fiabilité du budget de prompt.
@@ -81,9 +85,15 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       true,
     );
 
+    if (!content.trim()) {
+      throw new LlmEmptyResponseError(this.options.providerName);
+    }
+
     return parsePullRequestAnalysis(content);
   }
 
+  // Le test de connexion valide seulement les identifiants : une réponse vide
+  // reste acceptable ici, contrairement à une classification.
   async checkConnection(): Promise<void> {
     await this.createCompletion(
       [
@@ -94,14 +104,14 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         { role: "user", content: "Connection test." },
       ],
       false,
-      8,
+      LLM_RESPONSE_TOKEN_RESERVE,
     );
   }
 
   private async createCompletion(
     messages: ChatMessage[],
     structured: boolean,
-    maxTokens = 512,
+    maxTokens = LLM_RESPONSE_TOKEN_RESERVE,
   ): Promise<string> {
     const tokenLimit = this.options.usesMaxCompletionTokens
       ? { max_completion_tokens: maxTokens }

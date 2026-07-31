@@ -32,11 +32,20 @@ describe("parsePullRequestAnalysis", () => {
     expect(result).toEqual({ suggestions: [], summary: "OK" });
   });
 
-  it("retourne une analyse vide pour une réponse invalide", () => {
-    expect(parsePullRequestAnalysis("not json")).toEqual({
-      suggestions: [],
-      summary: "",
-    });
+  it("échoue au lieu de renvoyer une analyse vide quand la réponse n’a pas de JSON", () => {
+    expect(() => parsePullRequestAnalysis("not json")).toThrow(
+      "Réponse LLM invalide",
+    );
+  });
+
+  it("échoue sur une réponse vide plutôt que de la confondre avec « aucun label »", () => {
+    expect(() => parsePullRequestAnalysis("")).toThrow("réponse vide");
+  });
+
+  it("échoue sur un objet JSON tronqué", () => {
+    expect(() =>
+      parsePullRequestAnalysis('{"suggestions":[{"name":"bug"}'),
+    ).toThrow("Réponse LLM invalide");
   });
 
   it("rejette les confiances hors contrat au lieu de les borner ou convertir", () => {

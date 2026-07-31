@@ -2,11 +2,15 @@ import type { PullRequestLlmContext } from "../domain/pull-request-data.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import { parsePullRequestAnalysis } from "./classification-parser.js";
 import type { LlmProvider } from "./llm-provider.js";
-import { LlmProviderRequestError } from "./provider-error.js";
+import {
+  LlmEmptyResponseError,
+  LlmProviderRequestError,
+} from "./provider-error.js";
 import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
+import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
 
 type AnthropicResponse = {
   content?: Array<{
@@ -31,16 +35,23 @@ export class AnthropicProvider implements LlmProvider {
     const content = await this.createMessage(
       buildClassificationSystemPrompt(),
       buildClassificationPrompt(context),
-      512,
+      LLM_RESPONSE_TOKEN_RESERVE,
     );
+
+    if (!content.trim()) {
+      throw new LlmEmptyResponseError("Anthropic");
+    }
+
     return parsePullRequestAnalysis(content);
   }
 
+  // Le test de connexion valide seulement les identifiants : une réponse vide
+  // reste acceptable ici, contrairement à une classification.
   async checkConnection(): Promise<void> {
     await this.createMessage(
       "Reply with the single word OK.",
       "Connection test.",
-      8,
+      LLM_RESPONSE_TOKEN_RESERVE,
     );
   }
 
