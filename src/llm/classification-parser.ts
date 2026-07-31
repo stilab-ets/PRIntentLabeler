@@ -1,28 +1,41 @@
 import type { LabelSuggestion } from "../domain/label-suggestion.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 
-function clamp01(value: number): number {
-  if (Number.isNaN(value)) return 0;
-  return Math.min(1, Math.max(0, value));
-}
-
 export function normalizeSuggestions(raw: unknown): LabelSuggestion[] {
   if (!Array.isArray(raw)) return [];
 
   return raw
-    .map((entry): LabelSuggestion => {
-      const suggestion = (entry ?? {}) as Record<string, unknown>;
+    .map((entry): LabelSuggestion | null => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+
+      const suggestion = entry as Record<string, unknown>;
+      const name =
+        typeof suggestion.name === "string" ? suggestion.name.trim() : "";
+      const confidence = suggestion.confidence;
+
+      // Le contrat exige un nombre dans [0, 1]. Une chaîne "0.9", NaN ou une
+      // valeur hors intervalle est rejetée plutôt que convertie ou bornée :
+      // sinon une sortie invalide pourrait gagner artificiellement en confiance.
+      if (
+        !name ||
+        typeof confidence !== "number" ||
+        !Number.isFinite(confidence) ||
+        confidence < 0 ||
+        confidence > 1
+      ) {
+        return null;
+      }
+
       return {
-        name: typeof suggestion.name === "string" ? suggestion.name.trim() : "",
-        confidence:
-          typeof suggestion.confidence === "number"
-            ? clamp01(suggestion.confidence)
-            : 0,
+        name,
+        confidence,
         reason:
           typeof suggestion.reason === "string" ? suggestion.reason.trim() : "",
       };
     })
-    .filter((suggestion) => suggestion.name.length > 0);
+    .filter((suggestion): suggestion is LabelSuggestion => suggestion !== null);
 }
 
 function extractJsonObject(content: string): string {

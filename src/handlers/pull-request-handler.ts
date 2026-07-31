@@ -17,10 +17,14 @@ import {
 import { removeLabels } from "../labels/label-applier.js";
 import { applyAiSuggestedLabels } from "../labels/ai-label-applier.js";
 import { createLabelerCheckRun } from "../github/check-run.js";
-import { MAX_LABELS_TO_APPLY } from "../utils/constants.js";
+import {
+  MAX_LABELS_TO_APPLY,
+  MIN_CONFIDENCE_TO_SUGGEST,
+} from "../utils/constants.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import type { LlmUsageMetrics } from "../llm/openai-compatible-provider.js";
 import { getLlmConfigurationService } from "../configuration/runtime.js";
+import { CLASSIFICATION_PROMPT_VERSION } from "../llm/prompt-builder.js";
 
 export async function handlePullRequestEvent(
   context: Context<"pull_request">,
@@ -68,6 +72,7 @@ export async function handlePullRequestEvent(
         truncatedFiles: llmContext.promptBudget.files
           .filter((file) => file.truncated)
           .map((file) => file.filename),
+        promptVersion: CLASSIFICATION_PROMPT_VERSION,
       },
       "Filtered LLM context built",
     );
@@ -122,7 +127,16 @@ export async function handlePullRequestEvent(
       }
     }
 
-    if (provider) {
+    if (llmContext.repositoryLabels.length === 0) {
+      analysis = {
+        suggestions: [],
+        summary: "No repository labels are available.",
+      };
+      context.log.info(
+        { ...logContext, promptVersion: CLASSIFICATION_PROMPT_VERSION },
+        "No candidate repository labels, skipping LLM classification",
+      );
+    } else if (provider) {
       try {
         const raw = await provider.classifyPullRequest(llmContext);
         analysis = {
@@ -130,7 +144,7 @@ export async function handlePullRequestEvent(
           suggestions: filterValidSuggestions(
             raw.suggestions,
             llmContext.repositoryLabels,
-            undefined,
+            MIN_CONFIDENCE_TO_SUGGEST,
             MAX_LABELS_TO_APPLY,
           ),
         };

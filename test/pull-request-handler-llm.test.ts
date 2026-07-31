@@ -151,4 +151,46 @@ describe("handlePullRequestEvent — chemin LLM", () => {
 
     expect(ctx.octokit.issues.createComment).toHaveBeenCalled();
   });
+
+  it("rejette un label existant dans le dépôt mais absent du catalogue envoyé au LLM", async () => {
+    process.env.LABEL_MODE = "auto-all";
+    const ctx = createMockContext();
+    ctx.octokit.issues.listLabelsForRepo = vi.fn().mockResolvedValue({
+      data: Array.from({ length: 31 }, (_, index) => ({
+        name: `custom-label-${index + 1}`,
+      })),
+    });
+    const provider: LlmProvider = {
+      classifyPullRequest: vi.fn().mockResolvedValue({
+        suggestions: [
+          {
+            name: "custom-label-31",
+            confidence: 0.99,
+            reason: "Not shown to the model",
+          },
+        ],
+        summary: "Summary.",
+      }),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handlePullRequestEvent(ctx as any, provider);
+
+    expect(provider.classifyPullRequest).toHaveBeenCalled();
+    expect(ctx.octokit.issues.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("n'appelle pas le LLM lorsqu'aucun label candidat n'est disponible", async () => {
+    const ctx = createMockContext();
+    ctx.octokit.issues.listLabelsForRepo = vi
+      .fn()
+      .mockResolvedValue({ data: [] });
+    const provider = mockProvider();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await handlePullRequestEvent(ctx as any, provider);
+
+    expect(provider.classifyPullRequest).not.toHaveBeenCalled();
+    expect(ctx.octokit.issues.createComment).toHaveBeenCalled();
+  });
 });
