@@ -7,20 +7,20 @@ import type {
 } from "../domain/pull-request-data.js";
 import {
   ESTIMATED_CHARS_PER_TOKEN,
-  LLM_RESPONSE_TOKEN_RESERVE,
   MAX_ALL_FILES_SUMMARY,
   MAX_FILES_FOR_LLM,
-  MAX_LLM_CONTEXT_TOKENS,
   MAX_PATCH_LINES_PER_FILE,
   MAX_PATCH_TOKENS_PER_FILE,
   MAX_REPOSITORY_LABELS_FOR_LLM,
   MAX_TOTAL_PATCH_TOKENS,
+  MIN_PATCH_TOKENS_PER_FILE,
 } from "../utils/constants.js";
 import {
   inferPreferredFileRoles,
   rankFilesByImportance,
   selectRepresentativeFiles,
 } from "./file-selector.js";
+import { defaultLlmTokenBudget, type LlmTokenBudget } from "./model-budget.js";
 import { estimateTokens, truncatePatch } from "./patch-utils.js";
 import {
   buildClassificationPrompt,
@@ -31,6 +31,9 @@ import { selectCandidateLabels } from "./label-selector.js";
 
 type BuildContextOptions = {
   representativeFiles?: RankedPullRequestFile[];
+  // Budget du modèle réellement configuré : sans lui on tombe sur un fallback
+  // prudent, jamais sur une fenêtre inventée trop généreuse.
+  tokenBudget?: LlmTokenBudget;
 };
 
 function buildFileRoleSummary(
@@ -90,20 +93,25 @@ function estimateNonPatchTokens(context: PullRequestLlmContext): number {
   );
 }
 
-function availablePatchTokens(nonPatchTokens: number): number {
+function availablePatchTokens(
+  nonPatchTokens: number,
+  tokenBudget: LlmTokenBudget,
+): number {
   return Math.max(
     0,
     Math.min(
       MAX_TOTAL_PATCH_TOKENS,
-      MAX_LLM_CONTEXT_TOKENS - LLM_RESPONSE_TOKEN_RESERVE - nonPatchTokens,
+      tokenBudget.promptTokenBudget - nonPatchTokens,
     ),
   );
 }
 
-function emptyPromptBudget(): PullRequestLlmContext["promptBudget"] {
+function emptyPromptBudget(
+  tokenBudget: LlmTokenBudget,
+): PullRequestLlmContext["promptBudget"] {
   return {
-    contextLimitTokens: MAX_LLM_CONTEXT_TOKENS,
-    responseReserveTokens: LLM_RESPONSE_TOKEN_RESERVE,
+    contextLimitTokens: tokenBudget.contextWindowTokens,
+    responseReserveTokens: tokenBudget.responseReserveTokens,
     nonPatchEstimatedTokens: 0,
     availablePatchTokens: 0,
     allocatedPatchTokens: 0,
@@ -112,16 +120,62 @@ function emptyPromptBudget(): PullRequestLlmContext["promptBudget"] {
   };
 }
 
+function naturalPatchTokens(patch: string | undefined): number {
+  const lineLimited = truncatePatch(
+    patch,
+    MAX_PATCH_LINES_PER_FILE,
+    Number.MAX_SAFE_INTEGER,
+  );
+  return estimateTokens(lineLimited);
+}
+
+/**
+ * Admet autant de candidats que le budget de jetons le permet, dans l'ordre
+ * déjà priorisé. On s'arrête dès que le prochain fichier ne peut plus recevoir
+ * un extrait lisible (MIN_PATCH_TOKENS_PER_FILE), sauf pour le premier fichier
+ * qui est toujours gardé même tronqué.
+ */
+export function admitFilesWithinPatchBudget(
+  candidates: RankedPullRequestFile[],
+  patchBudget: number,
+  minTokensPerFile: number = MIN_PATCH_TOKENS_PER_FILE,
+  perFileLimit: number = MAX_PATCH_TOKENS_PER_FILE,
+): RankedPullRequestFile[] {
+  const admitted: RankedPullRequestFile[] = [];
+  let remaining = Math.max(0, Math.floor(patchBudget));
+
+  for (const candidate of candidates) {
+    const natural = Math.min(
+      naturalPatchTokens(candidate.file.patch),
+      perFileLimit,
+    );
+    if (natural <= 0) continue;
+
+    const minUseful = Math.min(natural, minTokensPerFile);
+    if (admitted.length > 0 && remaining < minUseful) break;
+
+    admitted.push(candidate);
+    remaining -= Math.min(natural, remaining);
+    if (remaining <= 0) break;
+  }
+
+  return admitted;
+}
+
 export function buildPullRequestLlmContext(
   prData: PullRequestData,
   options: BuildContextOptions = {},
 ): PullRequestLlmContext {
+  const tokenBudget = options.tokenBudget ?? defaultLlmTokenBudget();
+
   const ranked = rankFilesByImportance(prData.files, {
     title: prData.title,
     body: prData.body,
   });
 
-  const representativeFiles = (
+  // Candidats ordonnés par importance / diversité, plafonnés pour la sécurité
+  // (latence, coût). Le budget de jetons décide ensuite combien on en garde.
+  const candidates = (
     options.representativeFiles ??
     selectRepresentativeFiles(
       ranked,
@@ -151,7 +205,7 @@ export function buildPullRequestLlmContext(
     MAX_REPOSITORY_LABELS_FOR_LLM,
   );
 
-  const contextWithoutPatches: PullRequestLlmContext = {
+  const skeletonContext: PullRequestLlmContext = {
     repository: { owner: prData.owner, repo: prData.repo },
     pullRequest: {
       number: prData.number,
@@ -171,7 +225,10 @@ export function buildPullRequestLlmContext(
     repositoryLabelDescriptions,
     allFilesSummary,
     fileRoleSummary: buildFileRoleSummary(ranked),
-    selectedFiles: representativeFiles.map((rankedFile) => ({
+    // Estimation du coût fixe du prompt avec la liste complète des candidats :
+    // légèrement conservateur (on surestime un peu le non-patch), ce qui évite
+    // d'admettre un fichier de trop puis de le tronquer à zéro.
+    selectedFiles: candidates.map((rankedFile) => ({
       ...rankedFile,
       file: { ...rankedFile.file, patch: "" },
     })),
@@ -179,12 +236,21 @@ export function buildPullRequestLlmContext(
       (rankedFile) => rankedFile.contentPolicy === "summary-only",
     ).length,
     omittedFilesCount: Math.max(0, ranked.length - allFilesSummary.length),
-    selectedFilesCount: representativeFiles.length,
-    promptBudget: emptyPromptBudget(),
+    selectedFilesCount: candidates.length,
+    promptBudget: emptyPromptBudget(tokenBudget),
   };
 
-  const nonPatchEstimatedTokens = estimateNonPatchTokens(contextWithoutPatches);
-  const patchBudget = availablePatchTokens(nonPatchEstimatedTokens);
+  const nonPatchEstimatedTokens = estimateNonPatchTokens(skeletonContext);
+  const patchBudget = availablePatchTokens(
+    nonPatchEstimatedTokens,
+    tokenBudget,
+  );
+
+  const representativeFiles =
+    options.representativeFiles !== undefined
+      ? candidates
+      : admitFilesWithinPatchBudget(candidates, patchBudget);
+
   const lineLimitedPatches = representativeFiles.map((rankedFile) =>
     truncatePatch(
       rankedFile.file.patch,
@@ -227,11 +293,12 @@ export function buildPullRequestLlmContext(
   });
 
   const context: PullRequestLlmContext = {
-    ...contextWithoutPatches,
+    ...skeletonContext,
     selectedFiles,
+    selectedFilesCount: selectedFiles.length,
     promptBudget: {
-      contextLimitTokens: MAX_LLM_CONTEXT_TOKENS,
-      responseReserveTokens: LLM_RESPONSE_TOKEN_RESERVE,
+      contextLimitTokens: tokenBudget.contextWindowTokens,
+      responseReserveTokens: tokenBudget.responseReserveTokens,
       nonPatchEstimatedTokens,
       availablePatchTokens: patchBudget,
       allocatedPatchTokens: allocationFiles.reduce(

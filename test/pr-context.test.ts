@@ -1,21 +1,23 @@
 import { describe, it, expect } from "vitest";
 import {
+  admitFilesWithinPatchBudget,
   allocatePatchTokenBudgets,
   buildPullRequestLlmContext,
 } from "../src/llm/pr-context.js";
 import type {
   PullRequestData,
   PullRequestFileData,
+  RankedPullRequestFile,
 } from "../src/domain/pull-request-data.js";
 import {
   MAX_FILES_FOR_LLM,
-  LLM_RESPONSE_TOKEN_RESERVE,
-  MAX_LLM_CONTEXT_TOKENS,
   MAX_REPOSITORY_LABELS_FOR_LLM,
   MAX_TOTAL_PATCH_CHARS,
   MAX_TOTAL_PATCH_TOKENS,
+  MIN_PATCH_TOKENS_PER_FILE,
 } from "../src/utils/constants.js";
 import { estimateTokens } from "../src/llm/patch-utils.js";
+import { resolveLlmTokenBudget } from "../src/llm/model-budget.js";
 
 function baseData(files: PullRequestFileData[]): PullRequestData {
   return {
@@ -150,8 +152,8 @@ describe("buildPullRequestLlmContext", () => {
     expect(ctx.summaryOnlyFilesCount).toBe(2);
   });
 
-  it("limite selectedFiles à MAX_FILES_FOR_LLM", () => {
-    const files: PullRequestFileData[] = Array.from({ length: 20 }, (_, i) => ({
+  it("plafonne selectedFiles à MAX_FILES_FOR_LLM même avec un gros budget", () => {
+    const files: PullRequestFileData[] = Array.from({ length: 40 }, (_, i) => ({
       filename: `src/file${i}.ts`,
       status: "modified",
       additions: 1,
@@ -159,9 +161,51 @@ describe("buildPullRequestLlmContext", () => {
       changes: 1,
       patch: `+line${i}`,
     }));
-    const ctx = buildPullRequestLlmContext(baseData(files));
+    const ctx = buildPullRequestLlmContext(baseData(files), {
+      tokenBudget: resolveLlmTokenBudget("gemini", "gemini-3.5-flash"),
+    });
     expect(ctx.selectedFiles.length).toBe(MAX_FILES_FOR_LLM);
     expect(ctx.selectedFilesCount).toBe(MAX_FILES_FOR_LLM);
+  });
+
+  it("envoie plus de 6 petits fichiers quand le modèle a la place", () => {
+    const files: PullRequestFileData[] = Array.from({ length: 12 }, (_, i) => ({
+      filename: `src/file${i}.ts`,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+      patch: `+line${i}`,
+    }));
+    const ctx = buildPullRequestLlmContext(baseData(files), {
+      tokenBudget: resolveLlmTokenBudget("gemini", "gemini-3.5-flash"),
+    });
+    expect(ctx.selectedFiles.length).toBeGreaterThan(6);
+    expect(ctx.selectedFiles.length).toBe(12);
+  });
+
+  it("réduit le nombre de fichiers quand le budget de patchs est trop petit", () => {
+    const files: PullRequestFileData[] = Array.from({ length: 10 }, (_, i) => ({
+      filename: `src/file${i}.ts`,
+      status: "modified",
+      additions: 100,
+      deletions: 0,
+      changes: 100,
+      patch: `+${"x".repeat(3_000)}`,
+    }));
+    const ctx = buildPullRequestLlmContext(baseData(files), {
+      tokenBudget: {
+        contextWindowTokens: 8_000,
+        responseReserveTokens: 2_000,
+        promptTokenBudget: 4_000,
+        source: "environment",
+      },
+    });
+    expect(ctx.selectedFiles.length).toBeGreaterThan(0);
+    expect(ctx.selectedFiles.length).toBeLessThan(10);
+    expect(ctx.promptBudget.availablePatchTokens).toBeLessThanOrEqual(
+      MAX_TOTAL_PATCH_TOKENS,
+    );
   });
 
   it("tronque les patchs des fichiers sélectionnés", () => {
@@ -221,7 +265,7 @@ describe("buildPullRequestLlmContext", () => {
     expect(estimatedTokens).toBeLessThanOrEqual(MAX_TOTAL_PATCH_TOKENS);
   });
 
-  it("respecte la limite du prompt complet avec la réserve de réponse", () => {
+  it("respecte la limite du prompt complet avec la réserve de réponse du modèle", () => {
     const files: PullRequestFileData[] = Array.from({ length: 6 }, (_, i) => ({
       filename: `src/file${i}.ts`,
       status: "modified",
@@ -231,10 +275,12 @@ describe("buildPullRequestLlmContext", () => {
       patch: `+${"x".repeat(20_000)}`,
     }));
 
-    const ctx = buildPullRequestLlmContext(baseData(files));
+    const tokenBudget = resolveLlmTokenBudget("custom", "");
+    const ctx = buildPullRequestLlmContext(baseData(files), { tokenBudget });
     expect(
-      ctx.promptBudget.finalPromptEstimatedTokens + LLM_RESPONSE_TOKEN_RESERVE,
-    ).toBeLessThanOrEqual(MAX_LLM_CONTEXT_TOKENS);
+      ctx.promptBudget.finalPromptEstimatedTokens +
+        ctx.promptBudget.responseReserveTokens,
+    ).toBeLessThanOrEqual(tokenBudget.contextWindowTokens);
   });
 
   it("réduit le budget des patchs quand les métadonnées de la PR sont très volumineuses", () => {
@@ -354,5 +400,49 @@ describe("buildPullRequestLlmContext", () => {
     );
     expect(allocations).toEqual([1_500, 920, 20, 20, 20, 20]);
     expect(allocations.reduce((sum, value) => sum + value, 0)).toBe(2_500);
+  });
+});
+
+describe("admitFilesWithinPatchBudget", () => {
+  function candidate(filename: string, patch: string): RankedPullRequestFile {
+    return {
+      file: {
+        filename,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        patch,
+      },
+      score: 10,
+      reasons: [],
+      role: "source",
+      contentPolicy: "include-patch",
+    };
+  }
+
+  it("garde le premier fichier même si le budget est très serré", () => {
+    const admitted = admitFilesWithinPatchBudget(
+      [candidate("a.ts", `+${"x".repeat(3_000)}`)],
+      50,
+    );
+    expect(admitted.map((file) => file.file.filename)).toEqual(["a.ts"]);
+  });
+
+  it("refuse un fichier supplémentaire sans extrait lisible", () => {
+    const big = `+${"x".repeat(3_000)}`;
+    const admitted = admitFilesWithinPatchBudget(
+      [candidate("a.ts", big), candidate("b.ts", big), candidate("c.ts", big)],
+      MIN_PATCH_TOKENS_PER_FILE + 10,
+    );
+    expect(admitted).toHaveLength(1);
+  });
+
+  it("admet plusieurs petits fichiers tant que le budget le permet", () => {
+    const admitted = admitFilesWithinPatchBudget(
+      Array.from({ length: 8 }, (_, i) => candidate(`f${i}.ts`, "+ok")),
+      1_000,
+    );
+    expect(admitted).toHaveLength(8);
   });
 });
