@@ -45,39 +45,6 @@ export async function handlePullRequestEvent(
   try {
     const prData = await readPullRequestData(context);
 
-    // Préparation intelligente : on score/filtre les fichiers avant l'appel LLM.
-    const llmContext = buildPullRequestLlmContext(prData);
-    context.log.info(
-      {
-        ...logContext,
-        selectedFilesCount: llmContext.selectedFilesCount,
-        summaryOnlyFilesCount: llmContext.summaryOnlyFilesCount,
-        // Détail par fichier sélectionné : permet de vérifier immédiatement
-        // qu'un lockfile, un snapshot ou un fichier généré n'est jamais
-        // réellement envoyé au LLM (seul le rôle "include-patch" doit apparaître).
-        selectedFiles: llmContext.selectedFiles.map((ranked) => ({
-          filename: ranked.file.filename,
-          role: ranked.role,
-          score: ranked.score,
-          contentPolicy: ranked.contentPolicy,
-          reasons: ranked.reasons,
-        })),
-        estimatedTotalTokens:
-          llmContext.promptBudget.finalPromptEstimatedTokens +
-          llmContext.promptBudget.responseReserveTokens,
-        estimatedNonPatchTokens:
-          llmContext.promptBudget.nonPatchEstimatedTokens,
-        availablePatchTokens: llmContext.promptBudget.availablePatchTokens,
-        allocatedPatchTokens: llmContext.promptBudget.allocatedPatchTokens,
-        patchAllocations: llmContext.promptBudget.files,
-        truncatedFiles: llmContext.promptBudget.files
-          .filter((file) => file.truncated)
-          .map((file) => file.filename),
-        promptVersion: CLASSIFICATION_PROMPT_VERSION,
-      },
-      "Filtered LLM context built",
-    );
-
     let analysis: PullRequestAnalysis | null = null;
     let llmFailureReason: string | null = null;
     let provider: LlmProvider | null;
@@ -87,6 +54,8 @@ export async function handlePullRequestEvent(
     const onUsage = (usage: LlmUsageMetrics) =>
       context.log.info({ ...logContext, ...usage }, "LLM token usage measured");
 
+    // Le fournisseur doit être connu avant la construction du contexte : c'est
+    // sa fenêtre de jetons qui décide combien de fichiers on peut envoyer.
     if (providerOverride !== undefined) {
       provider = providerOverride;
     } else {
@@ -102,13 +71,15 @@ export async function handlePullRequestEvent(
           ? createLlmProvider(configuration, onUsage)
           : createEnvironmentLlmProvider(onUsage);
 
-        if (configuration) {
+        if (configuration && provider) {
           context.log.info(
             {
               ...logContext,
               installationId,
               llmProvider: configuration.provider,
               llmModel: configuration.model,
+              contextWindowTokens: provider.tokenBudget?.contextWindowTokens,
+              promptTokenBudget: provider.tokenBudget?.promptTokenBudget,
             },
             "Installation LLM configuration loaded",
           );
@@ -128,6 +99,41 @@ export async function handlePullRequestEvent(
         );
       }
     }
+
+    const llmContext = buildPullRequestLlmContext(prData, {
+      tokenBudget: provider?.tokenBudget,
+    });
+    context.log.info(
+      {
+        ...logContext,
+        selectedFilesCount: llmContext.selectedFilesCount,
+        summaryOnlyFilesCount: llmContext.summaryOnlyFilesCount,
+        // Détail par fichier sélectionné : permet de vérifier immédiatement
+        // qu'un lockfile, un snapshot ou un fichier généré n'est jamais
+        // réellement envoyé au LLM (seul le rôle "include-patch" doit apparaître).
+        selectedFiles: llmContext.selectedFiles.map((ranked) => ({
+          filename: ranked.file.filename,
+          role: ranked.role,
+          score: ranked.score,
+          contentPolicy: ranked.contentPolicy,
+          reasons: ranked.reasons,
+        })),
+        contextLimitTokens: llmContext.promptBudget.contextLimitTokens,
+        estimatedTotalTokens:
+          llmContext.promptBudget.finalPromptEstimatedTokens +
+          llmContext.promptBudget.responseReserveTokens,
+        estimatedNonPatchTokens:
+          llmContext.promptBudget.nonPatchEstimatedTokens,
+        availablePatchTokens: llmContext.promptBudget.availablePatchTokens,
+        allocatedPatchTokens: llmContext.promptBudget.allocatedPatchTokens,
+        patchAllocations: llmContext.promptBudget.files,
+        truncatedFiles: llmContext.promptBudget.files
+          .filter((file) => file.truncated)
+          .map((file) => file.filename),
+        promptVersion: CLASSIFICATION_PROMPT_VERSION,
+      },
+      "Filtered LLM context built",
+    );
 
     if (llmContext.repositoryLabels.length === 0) {
       analysis = {

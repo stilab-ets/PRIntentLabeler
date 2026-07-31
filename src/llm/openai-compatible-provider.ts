@@ -13,7 +13,7 @@ import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
-import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
+import { defaultLlmTokenBudget, type LlmTokenBudget } from "./model-budget.js";
 
 // Métriques comparant les jetons réellement facturés par le fournisseur à
 // notre estimation locale, pour surveiller la fiabilité du budget de prompt.
@@ -36,6 +36,7 @@ type OpenAiCompatibleOptions = {
   supportsJsonMode?: boolean;
   usesMaxCompletionTokens?: boolean;
   onUsage?: (metrics: LlmUsageMetrics) => void;
+  tokenBudget?: LlmTokenBudget;
 };
 
 type ChatMessage = {
@@ -61,6 +62,10 @@ type ChatCompletionResponse = {
 
 export class OpenAiCompatibleProvider implements LlmProvider {
   constructor(private readonly options: OpenAiCompatibleOptions) {}
+
+  get tokenBudget(): LlmTokenBudget {
+    return this.options.tokenBudget ?? defaultLlmTokenBudget();
+  }
 
   async classifyPullRequest(
     context: PullRequestLlmContext,
@@ -108,14 +113,15 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         { role: "user", content: "Connection test." },
       ],
       false,
-      LLM_RESPONSE_TOKEN_RESERVE,
     );
   }
 
   private async createCompletion(
     messages: ChatMessage[],
     structured: boolean,
-    maxTokens = LLM_RESPONSE_TOKEN_RESERVE,
+    // La réserve suit le modèle : inutile de demander 3 000 jetons de sortie à
+    // un modèle dont la fenêtre entière en fait 8 000.
+    maxTokens = this.tokenBudget.responseReserveTokens,
   ): Promise<string> {
     const tokenLimit = this.options.usesMaxCompletionTokens
       ? { max_completion_tokens: maxTokens }

@@ -12,7 +12,7 @@ import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
-import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
+import { resolveLlmTokenBudget, type LlmTokenBudget } from "./model-budget.js";
 
 type PerplexityResponse = {
   choices?: Array<{
@@ -26,11 +26,17 @@ type PerplexityResponse = {
 };
 
 export class PerplexityProvider implements LlmProvider {
+  public readonly tokenBudget: LlmTokenBudget;
+
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
     private readonly baseUrl = "https://api.perplexity.ai/v1",
-  ) {}
+    tokenBudget?: LlmTokenBudget,
+  ) {
+    this.tokenBudget =
+      tokenBudget ?? resolveLlmTokenBudget("perplexity", model);
+  }
 
   async classifyPullRequest(
     context: PullRequestLlmContext,
@@ -39,7 +45,7 @@ export class PerplexityProvider implements LlmProvider {
       this.createCompletion(
         buildClassificationSystemPrompt(),
         buildClassificationPrompt(context),
-        LLM_RESPONSE_TOKEN_RESERVE,
+        this.tokenBudget.responseReserveTokens,
       ),
     );
 
@@ -56,7 +62,7 @@ export class PerplexityProvider implements LlmProvider {
     await this.createCompletion(
       "Reply with the single word OK.",
       "Connection test.",
-      LLM_RESPONSE_TOKEN_RESERVE,
+      this.tokenBudget.responseReserveTokens,
     );
   }
 

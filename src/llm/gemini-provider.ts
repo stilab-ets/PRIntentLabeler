@@ -12,7 +12,7 @@ import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
-import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
+import { resolveLlmTokenBudget, type LlmTokenBudget } from "./model-budget.js";
 import { estimateTokens } from "./patch-utils.js";
 import type { LlmUsageMetrics } from "./openai-compatible-provider.js";
 
@@ -55,12 +55,17 @@ const ANALYSIS_SCHEMA = {
 };
 
 export class GeminiProvider implements LlmProvider {
+  public readonly tokenBudget: LlmTokenBudget;
+
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
     private readonly baseUrl = "https://generativelanguage.googleapis.com/v1beta",
     private readonly onUsage?: (metrics: LlmUsageMetrics) => void,
-  ) {}
+    tokenBudget?: LlmTokenBudget,
+  ) {
+    this.tokenBudget = tokenBudget ?? resolveLlmTokenBudget("gemini", model);
+  }
 
   async classifyPullRequest(
     context: PullRequestLlmContext,
@@ -72,7 +77,7 @@ export class GeminiProvider implements LlmProvider {
         system,
         prompt,
         true,
-        LLM_RESPONSE_TOKEN_RESERVE,
+        this.tokenBudget.responseReserveTokens,
         estimateTokens(system) + estimateTokens(prompt),
       ),
     );
@@ -91,7 +96,7 @@ export class GeminiProvider implements LlmProvider {
       "Reply with the single word OK.",
       "Connection test.",
       false,
-      LLM_RESPONSE_TOKEN_RESERVE,
+      this.tokenBudget.responseReserveTokens,
     );
   }
 

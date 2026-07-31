@@ -11,6 +11,7 @@ import {
   normalizeProviderBaseUrl,
   type LlmProviderConfiguration,
 } from "./provider-configuration.js";
+import { resolveLlmTokenBudget } from "./model-budget.js";
 
 export function createLlmProvider(
   configuration: LlmProviderConfiguration,
@@ -27,9 +28,13 @@ export function createLlmProvider(
     configuration.provider === "custom" ? configuration.baseUrl : undefined,
   );
 
+  // Résolu une seule fois ici : c'est ce budget qui décide ensuite du nombre de
+  // fichiers et de la taille des diffs envoyés au modèle choisi.
+  const tokenBudget = resolveLlmTokenBudget(configuration.provider, model);
+
   switch (configuration.provider) {
     case "groq":
-      return new GroqProvider(apiKey, model, baseUrl, onUsage);
+      return new GroqProvider(apiKey, model, baseUrl, onUsage, tokenBudget);
     case "openai":
       return new OpenAiCompatibleProvider({
         providerName: "OpenAI",
@@ -39,11 +44,12 @@ export function createLlmProvider(
         supportsJsonMode: true,
         usesMaxCompletionTokens: true,
         onUsage,
+        tokenBudget,
       });
     case "anthropic":
-      return new AnthropicProvider(apiKey, model, baseUrl);
+      return new AnthropicProvider(apiKey, model, baseUrl, tokenBudget);
     case "gemini":
-      return new GeminiProvider(apiKey, model, baseUrl, onUsage);
+      return new GeminiProvider(apiKey, model, baseUrl, onUsage, tokenBudget);
     case "xai":
       return new OpenAiCompatibleProvider({
         providerName: "xAI",
@@ -52,9 +58,10 @@ export function createLlmProvider(
         baseUrl,
         supportsJsonMode: true,
         onUsage,
+        tokenBudget,
       });
     case "perplexity":
-      return new PerplexityProvider(apiKey, model, baseUrl);
+      return new PerplexityProvider(apiKey, model, baseUrl, tokenBudget);
     case "custom":
       return new OpenAiCompatibleProvider({
         providerName: "API compatible OpenAI",
@@ -62,6 +69,7 @@ export function createLlmProvider(
         model,
         baseUrl,
         onUsage,
+        tokenBudget,
       });
   }
 }

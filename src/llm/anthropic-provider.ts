@@ -12,7 +12,7 @@ import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
-import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
+import { resolveLlmTokenBudget, type LlmTokenBudget } from "./model-budget.js";
 
 type AnthropicResponse = {
   content?: Array<{
@@ -25,11 +25,16 @@ type AnthropicResponse = {
 };
 
 export class AnthropicProvider implements LlmProvider {
+  public readonly tokenBudget: LlmTokenBudget;
+
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
     private readonly baseUrl = "https://api.anthropic.com/v1",
-  ) {}
+    tokenBudget?: LlmTokenBudget,
+  ) {
+    this.tokenBudget = tokenBudget ?? resolveLlmTokenBudget("anthropic", model);
+  }
 
   async classifyPullRequest(
     context: PullRequestLlmContext,
@@ -38,7 +43,7 @@ export class AnthropicProvider implements LlmProvider {
       this.createMessage(
         buildClassificationSystemPrompt(),
         buildClassificationPrompt(context),
-        LLM_RESPONSE_TOKEN_RESERVE,
+        this.tokenBudget.responseReserveTokens,
       ),
     );
 
@@ -55,7 +60,7 @@ export class AnthropicProvider implements LlmProvider {
     await this.createMessage(
       "Reply with the single word OK.",
       "Connection test.",
-      LLM_RESPONSE_TOKEN_RESERVE,
+      this.tokenBudget.responseReserveTokens,
     );
   }
 

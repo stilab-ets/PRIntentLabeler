@@ -1,8 +1,17 @@
 export const BOT_COMMENT_MARKER = "<!-- llm-pr-labeler -->";
-export const MAX_FILES_IN_COMMENT = 20;
+// Aligné sur le plafond de sélection pour que le commentaire liste tout ce
+// qui a réellement été envoyé au LLM.
+export const MAX_FILES_IN_COMMENT = 25;
 
-// Nombre maximum de fichiers dont le diff est envoyé au LLM.
-export const MAX_FILES_FOR_LLM = 6;
+// Plafond de sécurité, et non nombre visé : le nombre de fichiers réellement
+// envoyés découle du budget de jetons disponible. Ce plafond borne la taille du
+// prompt, la latence et le coût même quand la fenêtre du modèle est immense.
+export const MAX_FILES_FOR_LLM = 25;
+
+// En dessous de ce budget, l'extrait d'un diff ne montre plus rien d'utile :
+// mieux vaut un fichier de moins et des extraits lisibles que dix fragments
+// illisibles.
+export const MIN_PATCH_TOKENS_PER_FILE = 120;
 
 // Nombre maximum de lignes conservées par patch avant troncature.
 export const MAX_PATCH_LINES_PER_FILE = 60;
@@ -15,11 +24,26 @@ export const ESTIMATED_CHARS_PER_TOKEN =
     ? configuredCharsPerToken
     : 3;
 export const MAX_PATCH_TOKENS_PER_FILE = 750;
-export const MAX_TOTAL_PATCH_TOKENS = 2_500;
 
-// Ce budget limite une requête. Les limites TPM, la concurrence et les retries
-// doivent être gérés séparément.
-export const MAX_LLM_CONTEXT_TOKENS = 8_000;
+// Plafond de coût pour les diffs (pas la fenêtre du modèle) : on n'utilise
+// jamais plus que ce que le LLM offre, mais on coupe aussi ici pour éviter
+// latence/quota excessifs. Surchargeable via MAX_TOTAL_PATCH_TOKENS.
+const configuredTotalPatchTokens = Number.parseInt(
+  process.env.MAX_TOTAL_PATCH_TOKENS ?? "",
+  10,
+);
+export const MAX_TOTAL_PATCH_TOKENS =
+  Number.isFinite(configuredTotalPatchTokens) && configuredTotalPatchTokens > 0
+    ? configuredTotalPatchTokens
+    : 10_000;
+
+// Marge entre notre estimation (caractères / 3) et le tokenizer réel du
+// fournisseur, qui diffère d'un modèle à l'autre.
+export const LLM_PROMPT_SAFETY_RATIO = 0.85;
+
+// Part maximale de la fenêtre réservée à la réponse, pour qu'un modèle à petite
+// fenêtre garde de la place pour le prompt.
+export const LLM_RESPONSE_RESERVE_MAX_RATIO = 0.25;
 
 // Plafond de jetons accordé à la réponse du modèle, aussi utilisé comme
 // `max_tokens` par les fournisseurs. Le JSON attendu est court, mais les modèles
