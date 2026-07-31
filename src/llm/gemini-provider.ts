@@ -5,7 +5,9 @@ import type { LlmProvider } from "./llm-provider.js";
 import {
   LlmEmptyResponseError,
   LlmProviderRequestError,
+  parseRetryAfterMs,
 } from "./provider-error.js";
+import { retryLlmRequest } from "./retry.js";
 import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
@@ -65,12 +67,14 @@ export class GeminiProvider implements LlmProvider {
   ): Promise<PullRequestAnalysis> {
     const system = buildClassificationSystemPrompt();
     const prompt = buildClassificationPrompt(context);
-    const content = await this.generateContent(
-      system,
-      prompt,
-      true,
-      LLM_RESPONSE_TOKEN_RESERVE,
-      estimateTokens(system) + estimateTokens(prompt),
+    const content = await retryLlmRequest(() =>
+      this.generateContent(
+        system,
+        prompt,
+        true,
+        LLM_RESPONSE_TOKEN_RESERVE,
+        estimateTokens(system) + estimateTokens(prompt),
+      ),
     );
 
     if (!content.trim()) {
@@ -139,6 +143,7 @@ export class GeminiProvider implements LlmProvider {
         "Gemini",
         response.status,
         payload.error?.message,
+        parseRetryAfterMs(response.headers.get("retry-after")),
       );
     }
 

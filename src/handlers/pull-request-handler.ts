@@ -25,6 +25,7 @@ import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import type { LlmUsageMetrics } from "../llm/openai-compatible-provider.js";
 import { getLlmConfigurationService } from "../configuration/runtime.js";
 import { CLASSIFICATION_PROMPT_VERSION } from "../llm/prompt-builder.js";
+import { describeLlmFailure } from "../llm/failure-message.js";
 
 export async function handlePullRequestEvent(
   context: Context<"pull_request">,
@@ -78,6 +79,7 @@ export async function handlePullRequestEvent(
     );
 
     let analysis: PullRequestAnalysis | null = null;
+    let llmFailureReason: string | null = null;
     let provider: LlmProvider | null;
 
     // Journalise les jetons réellement facturés par le fournisseur retenu,
@@ -156,6 +158,7 @@ export async function handlePullRequestEvent(
           "LLM label suggestions generated",
         );
       } catch (llmError) {
+        llmFailureReason = describeLlmFailure(llmError);
         context.log.warn(
           {
             ...logContext,
@@ -169,6 +172,8 @@ export async function handlePullRequestEvent(
         );
       }
     } else {
+      llmFailureReason =
+        "Aucun fournisseur LLM n'est configuré pour cette installation.";
       context.log.warn(
         logContext,
         "No LLM configuration available, skipping LLM classification",
@@ -233,6 +238,7 @@ export async function handlePullRequestEvent(
       llmContext,
       analysis,
       appliedLabels,
+      llmFailureReason,
     );
     await upsertPullRequestComment(context, prData.number, commentBody);
 
@@ -244,7 +250,7 @@ export async function handlePullRequestEvent(
           ? `${analysis.suggestions.length} label(s) suggéré(s) : ${analysis.suggestions
               .map((s) => s.name)
               .join(", ")}.`
-          : "Aucune suggestion de label pour cette PR.";
+          : (llmFailureReason ?? "Aucune suggestion de label pour cette PR.");
       await createLabelerCheckRun(context, pull_request.head.sha, checkSummary);
     } catch (checkError) {
       context.log.warn(

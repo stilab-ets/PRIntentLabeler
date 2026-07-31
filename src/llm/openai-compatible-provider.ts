@@ -5,7 +5,9 @@ import type { LlmProvider } from "./llm-provider.js";
 import {
   LlmEmptyResponseError,
   LlmProviderRequestError,
+  parseRetryAfterMs,
 } from "./provider-error.js";
+import { retryLlmRequest } from "./retry.js";
 import { estimateTokens } from "./patch-utils.js";
 import {
   buildClassificationPrompt,
@@ -77,12 +79,14 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   private async classifyWithPrompt(
     prompt: string,
   ): Promise<PullRequestAnalysis> {
-    const content = await this.createCompletion(
-      [
-        { role: "system", content: buildClassificationSystemPrompt() },
-        { role: "user", content: prompt },
-      ],
-      true,
+    const content = await retryLlmRequest(() =>
+      this.createCompletion(
+        [
+          { role: "system", content: buildClassificationSystemPrompt() },
+          { role: "user", content: prompt },
+        ],
+        true,
+      ),
     );
 
     if (!content.trim()) {
@@ -154,6 +158,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         this.options.providerName,
         response.status,
         payload.error?.message,
+        parseRetryAfterMs(response.headers.get("retry-after")),
       );
     }
 
