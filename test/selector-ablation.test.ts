@@ -112,8 +112,8 @@ describe("selector ablation", () => {
     expect(scored).toContain("## Representative Diffs");
     expect(random).toContain("## Representative Diffs");
     for (const prompt of [title, roles, scored, random]) {
-      expect(prompt).toContain("- bug");
-      expect(prompt).toContain("- feature");
+      expect(prompt).toContain('- {"name":"bug"}');
+      expect(prompt).toContain('- {"name":"feature"}');
       expect(prompt).not.toMatch(/\d+\s*(pts|\/20)/);
     }
   });

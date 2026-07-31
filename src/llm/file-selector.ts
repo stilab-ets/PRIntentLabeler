@@ -218,8 +218,6 @@ const PERFORMANCE_TOKENS = new Set([
   "throttle",
 ]);
 
-const PUBLIC_BEHAVIOR_TOKENS = ["controller", "service", "router", "endpoint"];
-
 export type FileScoreContext = {
   title?: string;
   body?: string;
@@ -368,6 +366,8 @@ const ROLE_RULES: RoleRule[] = [
       base.endsWith("_test.go") ||
       base.endsWith("_test.py") ||
       base.startsWith("test_") ||
+      base === "test.py" ||
+      base === "tests.py" ||
       base.endsWith("test.java") ||
       base.endsWith("tests.java") ||
       path.endsWith(".snap"),
@@ -589,14 +589,6 @@ function evaluateFile(
         ? "performance signal confirmed by title"
         : "performance path signal",
     );
-  }
-
-  if (
-    role === "source" &&
-    (intersects(context.tokens, PUBLIC_BEHAVIOR_TOKENS) ||
-      context.segments.includes("api"))
-  ) {
-    add(1, "public behavior signal");
   }
 
   switch (file.status) {

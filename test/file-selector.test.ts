@@ -269,6 +269,19 @@ describe("scoreFile / rankFilesByImportance", () => {
     expect(classifyFileRole("module/test_parser.py")).toBe("test");
   });
 
+  it("reconnaît tests.py/test.py (convention Django, fichier unique)", () => {
+    expect(classifyFileRole("produits/tests.py")).toBe("test");
+    expect(classifyFileRole("produits/test.py")).toBe("test");
+  });
+
+  it("n'accorde plus de bonus « public behavior » basé sur le seul nom de fichier", () => {
+    // Ancien faux positif : un fichier nommé service.ts/controller.ts n'a pas
+    // plus de poids qu'un autre fichier source équivalent sans ce mot-clé.
+    const service = scoreFile(file("src/service.ts"));
+    const plain = scoreFile(file("src/anything.ts"));
+    expect(service).toBe(plain);
+  });
+
   it("booste un fichier dont le chemin matche le titre de la PR, plus que la description seule", () => {
     const without = scoreFile(file("src/billing/invoice.ts"));
     const withTitle = scoreFile(file("src/billing/invoice.ts"), {

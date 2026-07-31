@@ -50,7 +50,7 @@ describe("GroqProvider", () => {
           message: {
             content: JSON.stringify({
               suggestions: [
-                { name: "bug", confidence: 1.2, reason: "crash corrigé" },
+                { name: "bug", confidence: 0.92, reason: "crash corrigé" },
               ],
               summary: "Corrige le login.",
             }),
@@ -70,7 +70,7 @@ describe("GroqProvider", () => {
       buildPullRequestLlmContext(prData),
     );
 
-    expect(result.suggestions[0].confidence).toBe(1);
+    expect(result.suggestions[0].confidence).toBe(0.92);
     expect(onUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "Groq",
