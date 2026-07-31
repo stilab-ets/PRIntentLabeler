@@ -5,7 +5,9 @@ import type { LlmProvider } from "./llm-provider.js";
 import {
   LlmEmptyResponseError,
   LlmProviderRequestError,
+  parseRetryAfterMs,
 } from "./provider-error.js";
+import { retryLlmRequest } from "./retry.js";
 import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
@@ -33,10 +35,12 @@ export class PerplexityProvider implements LlmProvider {
   async classifyPullRequest(
     context: PullRequestLlmContext,
   ): Promise<PullRequestAnalysis> {
-    const content = await this.createCompletion(
-      buildClassificationSystemPrompt(),
-      buildClassificationPrompt(context),
-      LLM_RESPONSE_TOKEN_RESERVE,
+    const content = await retryLlmRequest(() =>
+      this.createCompletion(
+        buildClassificationSystemPrompt(),
+        buildClassificationPrompt(context),
+        LLM_RESPONSE_TOKEN_RESERVE,
+      ),
     );
 
     if (!content.trim()) {
@@ -89,6 +93,7 @@ export class PerplexityProvider implements LlmProvider {
         "Perplexity",
         response.status,
         payload.error?.message,
+        parseRetryAfterMs(response.headers.get("retry-after")),
       );
     }
 

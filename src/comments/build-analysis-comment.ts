@@ -20,6 +20,7 @@ export function buildAnalysisComment(
   context: PullRequestLlmContext,
   analysis: PullRequestAnalysis | null = null,
   appliedLabels: string[] = [],
+  llmFailureReason: string | null = null,
 ): string {
   const selected = context.selectedFiles.slice(0, MAX_FILES_IN_COMMENT);
 
@@ -42,7 +43,12 @@ export function buildAnalysisComment(
 |---|---|---|---|---|
 ${selectedTable}`;
 
-  const labelsSection = buildLabelsSection(prData, analysis, appliedLabels);
+  const labelsSection = buildLabelsSection(
+    prData,
+    analysis,
+    appliedLabels,
+    llmFailureReason,
+  );
 
   const summarySection =
     analysis && analysis.summary
@@ -79,6 +85,7 @@ function buildLabelsSection(
   prData: PullRequestData,
   analysis: PullRequestAnalysis | null,
   appliedLabels: string[],
+  llmFailureReason: string | null,
 ): string {
   if (analysis && analysis.suggestions.length > 0) {
     const checkboxes = renderCheckboxLines(analysis.suggestions, appliedLabels);
@@ -106,7 +113,7 @@ ${checkboxes}${appliedNote}`;
   // label retenu produisaient le même message : impossible de savoir laquelle.
   const reason = analysis
     ? `Le LLM a analysé cette PR mais aucun label du repo n'a atteint le seuil de confiance de ${Math.round(MIN_CONFIDENCE_TO_SUGGEST * 100)} %.`
-    : "L'analyse LLM n'a pas abouti (fournisseur indisponible, réponse vide ou réponse hors contrat JSON). Consulte les logs de l'application.";
+    : (llmFailureReason ?? "L'analyse LLM n'a pas abouti.");
 
   return `### Labels disponibles dans le repo
 
