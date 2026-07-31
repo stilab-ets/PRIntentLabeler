@@ -7,6 +7,7 @@ import {
   BOT_COMMENT_MARKER,
   formatFileScore,
   MAX_FILES_IN_COMMENT,
+  MIN_CONFIDENCE_TO_SUGGEST,
 } from "../utils/constants.js";
 import { toAiLabelName } from "../labels/ai-label-name.js";
 import {
@@ -101,11 +102,17 @@ ${checkboxes}${appliedNote}`;
       ? prData.repositoryLabels.map((label) => `\`${label}\``).join(", ")
       : "_Aucun label trouvé dans le repo._";
 
+  // Une analyse absente (panne du fournisseur) et une analyse aboutie sans
+  // label retenu produisaient le même message : impossible de savoir laquelle.
+  const reason = analysis
+    ? `Le LLM a analysé cette PR mais aucun label du repo n'a atteint le seuil de confiance de ${Math.round(MIN_CONFIDENCE_TO_SUGGEST * 100)} %.`
+    : "L'analyse LLM n'a pas abouti (fournisseur indisponible, réponse vide ou réponse hors contrat JSON). Consulte les logs de l'application.";
+
   return `### Labels disponibles dans le repo
 
 ${availableLabels}
 
->  Aucune suggestion LLM disponible pour cette PR.`;
+>  ${reason}`;
 }
 
 function escapeMarkdownTableValue(value: string): string {

@@ -2,18 +2,31 @@ import type { PullRequestLlmContext } from "../domain/pull-request-data.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
 import { parsePullRequestAnalysis } from "./classification-parser.js";
 import type { LlmProvider } from "./llm-provider.js";
-import { LlmProviderRequestError } from "./provider-error.js";
+import {
+  LlmEmptyResponseError,
+  LlmProviderRequestError,
+} from "./provider-error.js";
 import {
   buildClassificationPrompt,
   buildClassificationSystemPrompt,
 } from "./prompt-builder.js";
+import { LLM_RESPONSE_TOKEN_RESERVE } from "../utils/constants.js";
+import { estimateTokens } from "./patch-utils.js";
+import type { LlmUsageMetrics } from "./openai-compatible-provider.js";
 
 type GeminiResponse = {
   candidates?: Array<{
     content?: {
       parts?: Array<{ text?: string }>;
     };
+    finishReason?: string;
   }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+  };
   error?: {
     message?: string;
   };
@@ -44,26 +57,37 @@ export class GeminiProvider implements LlmProvider {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly baseUrl = "https://generativelanguage.googleapis.com/v1beta",
+    private readonly onUsage?: (metrics: LlmUsageMetrics) => void,
   ) {}
 
   async classifyPullRequest(
     context: PullRequestLlmContext,
   ): Promise<PullRequestAnalysis> {
+    const system = buildClassificationSystemPrompt();
+    const prompt = buildClassificationPrompt(context);
     const content = await this.generateContent(
-      buildClassificationSystemPrompt(),
-      buildClassificationPrompt(context),
+      system,
+      prompt,
       true,
-      512,
+      LLM_RESPONSE_TOKEN_RESERVE,
+      estimateTokens(system) + estimateTokens(prompt),
     );
+
+    if (!content.trim()) {
+      throw new LlmEmptyResponseError("Gemini");
+    }
+
     return parsePullRequestAnalysis(content);
   }
 
+  // Le test de connexion valide seulement les identifiants : une réponse vide
+  // reste acceptable ici, contrairement à une classification.
   async checkConnection(): Promise<void> {
     await this.generateContent(
       "Reply with the single word OK.",
       "Connection test.",
       false,
-      8,
+      LLM_RESPONSE_TOKEN_RESERVE,
     );
   }
 
@@ -72,6 +96,7 @@ export class GeminiProvider implements LlmProvider {
     prompt: string,
     structured: boolean,
     maxOutputTokens: number,
+    estimatedPromptTokens = 0,
   ): Promise<string> {
     const model = this.model.replace(/^models\//, "");
     const generationConfig: Record<string, unknown> = {
@@ -117,10 +142,49 @@ export class GeminiProvider implements LlmProvider {
       );
     }
 
-    return (
-      payload.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? "")
-        .join("") ?? ""
+    this.reportUsage(payload.usageMetadata, estimatedPromptTokens);
+
+    const candidate = payload.candidates?.[0];
+    const text =
+      candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+
+    // Depuis Gemini 2.5, `maxOutputTokens` plafonne réflexion + réponse : si la
+    // réflexion consomme tout, l'API renvoie MAX_TOKENS sans aucun texte.
+    if (!text.trim() && candidate?.finishReason === "MAX_TOKENS") {
+      throw new LlmEmptyResponseError(
+        "Gemini",
+        `plafond de ${maxOutputTokens} jetons de sortie épuisé par la réflexion du modèle`,
+      );
+    }
+
+    return text;
+  }
+
+  private reportUsage(
+    usage: GeminiResponse["usageMetadata"],
+    estimatedPromptTokens: number,
+  ): void {
+    if (!this.onUsage || !usage) return;
+
+    const promptTokens = usage.promptTokenCount ?? 0;
+    const completionTokens =
+      (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
+    const absolutePromptTokenError = Math.abs(
+      promptTokens - estimatedPromptTokens,
     );
+
+    this.onUsage({
+      provider: "Gemini",
+      model: this.model,
+      promptTokens,
+      completionTokens,
+      totalTokens: usage.totalTokenCount ?? promptTokens + completionTokens,
+      estimatedPromptTokens,
+      absolutePromptTokenError,
+      promptTokenErrorPercentage:
+        promptTokens === 0
+          ? 0
+          : (absolutePromptTokenError / promptTokens) * 100,
+    });
   }
 }

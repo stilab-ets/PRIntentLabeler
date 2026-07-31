@@ -1,5 +1,6 @@
 import type { LabelSuggestion } from "../domain/label-suggestion.js";
 import type { PullRequestAnalysis } from "../domain/llm-analysis.js";
+import { LlmInvalidResponseError } from "./provider-error.js";
 
 export function normalizeSuggestions(raw: unknown): LabelSuggestion[] {
   if (!Array.isArray(raw)) return [];
@@ -46,19 +47,27 @@ function extractJsonObject(content: string): string {
 
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start === -1 || end < start) return "{}";
+  if (start === -1 || end < start) {
+    throw new LlmInvalidResponseError(
+      trimmed ? `aucun objet JSON trouvé dans « ${trimmed} »` : "réponse vide",
+    );
+  }
   return trimmed.slice(start, end + 1);
 }
 
+// Une sortie illisible doit remonter comme une erreur : la confondre avec un
+// résultat vide faisait passer une panne du modèle pour « aucun label pertinent ».
 export function parsePullRequestAnalysis(content: string): PullRequestAnalysis {
+  const json = extractJsonObject(content);
+
   let parsed: { suggestions?: unknown; summary?: unknown };
   try {
-    parsed = JSON.parse(extractJsonObject(content)) as {
+    parsed = JSON.parse(json) as {
       suggestions?: unknown;
       summary?: unknown;
     };
   } catch {
-    return { suggestions: [], summary: "" };
+    throw new LlmInvalidResponseError(`JSON non analysable : ${json}`);
   }
 
   return {

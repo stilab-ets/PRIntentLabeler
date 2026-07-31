@@ -43,7 +43,7 @@ export function createLlmProvider(
     case "anthropic":
       return new AnthropicProvider(apiKey, model, baseUrl);
     case "gemini":
-      return new GeminiProvider(apiKey, model, baseUrl);
+      return new GeminiProvider(apiKey, model, baseUrl, onUsage);
     case "xai":
       return new OpenAiCompatibleProvider({
         providerName: "xAI",
